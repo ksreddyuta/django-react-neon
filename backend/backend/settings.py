@@ -63,7 +63,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Neon PostgreSQL Config
 DATABASES = {
     'default': dj_database_url.parse(
-        os.environ.get('DATABASE_URL', 'postgresql://neondb_owner:npg_coUkNCK2A8fx@ep-square-math-aev60pu6-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'),
+        os.environ.get('DATABASE_URL'),
         conn_max_age=600,
         conn_health_checks=True,
     )
