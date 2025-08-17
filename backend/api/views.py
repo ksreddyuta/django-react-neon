@@ -52,3 +52,7 @@ class ProtectedView(APIView):
         return Response({
             "message": f"Hello {request.user.email}! This is a protected endpoint."
         })
+
+class HealthCheck(APIView):
+    def get(self, request):
+        return Response({"status": "ok", "service": "Django API"})
