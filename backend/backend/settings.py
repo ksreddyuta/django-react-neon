@@ -102,7 +102,7 @@ SIMPLE_JWT = {
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React dev server
-    "https://your-vercel-app.vercel.app",  # Your production frontend
+    "https://django-react-neon.vercel.app",  # Your production frontend
 ]
 
 CORS_ALLOW_CREDENTIALS = True
