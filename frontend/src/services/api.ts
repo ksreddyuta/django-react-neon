@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AirQualityResponse, MapLocation } from '../types/airQuality';
 
 // Create axios instance
 const api = axios.create({
@@ -7,6 +8,33 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Add token to requests
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+export const airQualityService = {
+  getAirQualityData: async (city: string, days: number = 30): Promise<AirQualityResponse> => {
+    const response = await api.get(`/api/air-quality/${city}?days=${days}`);
+    return response.data;
+  },
+
+  getMapLocations: async (): Promise<MapLocation[]> => {
+    const response = await api.get('/api/map-locations/');
+    return response.data;
+  },
+};
+
 
 // Add token to requests
 api.interceptors.request.use(

@@ -1,4 +1,3 @@
-// src/pages/DashboardPage.tsx
 import React from 'react';
 import {
   Container,
@@ -6,195 +5,183 @@ import {
   Box,
   Grid,
   Paper,
-  Card,
-  CardContent,
   Avatar,
   Chip,
+  Divider,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import {
-  Dashboard as DashboardIcon,
   Person as PersonIcon,
-  Security as SecurityIcon,
-  Notifications as NotificationsIcon,
+  Email as EmailIcon,
+  CalendarToday as CalendarIcon,
+  LocationOn as LocationIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../hooks/useAuth';
+import { MapSection } from '../components/dashboard/MapSection';
+import { ChartSection } from '../components/dashboard/ChartSection';
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
+  
+  console.log('DashboardPage rendering, user:', user); // Debug log
 
   return (
-    <Container maxWidth="lg" sx={{ py: 4 }}>
+    <Container maxWidth="xl" sx={{ py: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography variant="h3" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
-          Dashboard
+          Air Quality Dashboard
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Welcome back, {user?.email}! Here's what's happening with your account today.
+          Welcome back, {user?.email}! Monitor air quality across Texas in real-time.
         </Typography>
       </Box>
 
-      {/* Stats Cards */}
-      <Grid container spacing={4} sx={{ mb: 4 }}>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar sx={{ bgcolor: 'primary.main', mr: 2 }}>
-                <DashboardIcon />
-              </Avatar>
-              <Box>
-                <Typography variant="h6" component="div">
-                  12
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Projects
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar sx={{ bgcolor: 'secondary.main', mr: 2 }}>
-                <PersonIcon />
-              </Avatar>
-              <Box>
-                <Typography variant="h6" component="div">
-                  24
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Users
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar sx={{ bgcolor: 'success.main', mr: 2 }}>
-                <SecurityIcon />
-              </Avatar>
-              <Box>
-                <Typography variant="h6" component="div">
-                  99.9%
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Uptime
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid size={{ xs: 12, md: 3 }}>
-          <Card>
-            <CardContent sx={{ display: 'flex', alignItems: 'center' }}>
-              <Avatar sx={{ bgcolor: 'warning.main', mr: 2 }}>
-                <NotificationsIcon />
-              </Avatar>
-              <Box>
-                <Typography variant="h6" component="div">
-                  3
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Notifications
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Main Content */}
+      {/* Main Content Grid */}
       <Grid container spacing={4}>
-        <Grid size={{ xs: 12, md: 8 }}>
-          <Paper sx={{ p: 3 }}>
-            <Typography variant="h5" component="h2" gutterBottom sx={{ fontWeight: 600 }}>
-              Recent Activity
-            </Typography>
-            <Box sx={{ mt: 2 }}>
-              {[1, 2, 3].map((item) => (
-                <Box
-                  key={item}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    py: 2,
-                    borderBottom: item < 3 ? 1 : 0,
-                    borderColor: 'divider',
-                  }}
-                >
-                  <Avatar sx={{ bgcolor: 'primary.main', mr: 2, width: 40, height: 40 }}>
-                    {user?.email?.[0]?.toUpperCase() || 'U'}
-                  </Avatar>
-                  <Box sx={{ flexGrow: 1 }}>
-                    <Typography variant="body1">
-                      <strong>User {item}</strong> performed an action
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      2 hours ago
-                    </Typography>
-                  </Box>
-                  <Chip label="Completed" color="success" size="small" />
-                </Box>
-              ))}
-            </Box>
-          </Paper>
-        </Grid>
-
-        <Grid size={{ xs: 12, md: 4 }}>
-          <Paper sx={{ p: 3, mb: 4 }}>
+        {/* Left Column - User Details */}
+        <Grid size={{xs:12, md:4, lg:3}}>
+          <Paper sx={{ p: 3, position: 'sticky', top: 20, height: 'fit-content' }}>
             <Typography variant="h5" component="h2" gutterBottom sx={{ fontWeight: 600 }}>
               User Profile
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', mt: 2, mb: 3 }}>
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3 }}>
               <Avatar
                 sx={{
-                  width: 64,
-                  height: 64,
+                  width: 80,
+                  height: 80,
                   bgcolor: 'primary.main',
-                  mr: 2,
-                  fontSize: '1.5rem',
+                  mb: 2,
+                  fontSize: '2rem',
                 }}
               >
                 {user?.email?.[0]?.toUpperCase() || 'U'}
               </Avatar>
-              <Box>
-                <Typography variant="h6">{user?.email}</Typography>
+              <Typography variant="h6" align="center">
+                {user?.email}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" align="center">
+                {user?.username || 'Air Quality Analyst'}
+              </Typography>
+              <Chip label="Premium Account" color="primary" size="small" sx={{ mt: 1 }} />
+            </Box>
+            
+            <Divider sx={{ my: 2 }} />
+            
+            <List dense>
+              <ListItem>
+                <ListItemIcon>
+                  <EmailIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText primary="Email" secondary={user?.email} />
+              </ListItem>
+              <ListItem>
+                <ListItemIcon>
+                  <PersonIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText primary="Member Since" secondary="January 15, 2024" />
+              </ListItem>
+              <ListItem>
+                <ListItemIcon>
+                  <LocationIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText primary="Location" secondary="Texas, USA" />
+              </ListItem>
+              <ListItem>
+                <ListItemIcon>
+                  <CalendarIcon color="primary" />
+                </ListItemIcon>
+                <ListItemText primary="Last Login" secondary="Today, 10:30 AM" />
+              </ListItem>
+            </List>
+            
+            <Box sx={{ mt: 3, p: 2, bgcolor: 'grey.50', borderRadius: 2 }}>
+              <Typography variant="body2" gutterBottom sx={{ fontWeight: 500 }}>
+                Dashboard Usage
+              </Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body2" color="text.secondary">
-                  {user?.username || 'No username set'}
+                  Data Points:
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  12,456
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+                <Typography variant="body2" color="text.secondary">
+                  Stations Monitored:
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  24
                 </Typography>
               </Box>
             </Box>
-
-            <Box sx={{ mt: 2 }}>
-              <Typography
-                variant="body2"
-                sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}
-              >
-                <span>Status:</span>
-                <Chip label="Active" color="success" size="small" />
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}
-              >
-                <span>Member since:</span>
-                <span>Jan 15, 2024</span>
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{ display: 'flex', justifyContent: 'space-between' }}
-              >
-                <span>Last login:</span>
-                <span>Today</span>
-              </Typography>
-            </Box>
           </Paper>
+        </Grid>
+
+        {/* Right Column - Map and Charts */}
+        <Grid size={{xs:12, md:8, lg:9}}>
+          <Grid container spacing={4}>
+            {/* Map Section */}
+            <Grid size={{xs: 12}}>
+              <MapSection />
+            </Grid>
+
+            {/* Chart Section */}
+            <Grid size={{xs: 12}}>
+              <ChartSection />
+            </Grid>
+
+            {/* Quick Stats */}
+            <Grid size={{xs: 12}}>
+              <Grid container spacing={3}>
+                <Grid size={{xs:12, sm:6, md:3}}>
+                  <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'success.light', color: 'success.contrastText' }}>
+                    <Typography variant="h4" component="div" gutterBottom>
+                      45
+                    </Typography>
+                    <Typography variant="body2">
+                      Good Air Quality Days
+                    </Typography>
+                  </Paper>
+                </Grid>
+                <Grid size={{xs:12, sm:6, md:3}}>
+                  <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.light', color: 'warning.contrastText' }}>
+                    <Typography variant="h4" component="div" gutterBottom>
+                      12
+                    </Typography>
+                    <Typography variant="body2">
+                      Moderate Air Quality Days
+                    </Typography>
+                  </Paper>
+                </Grid>
+                <Grid size={{xs:12, sm:6, md:3}}>
+                  <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'error.light', color: 'error.contrastText' }}>
+                    <Typography variant="h4" component="div" gutterBottom>
+                      3
+                    </Typography>
+                    <Typography variant="body2">
+                      Unhealthy Days
+                    </Typography>
+                  </Paper>
+                </Grid>
+                <Grid size={{xs:12, sm:6, md:3}}>
+                  <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'info.light', color: 'info.contrastText' }}>
+                    <Typography variant="h4" component="div" gutterBottom>
+                      24
+                    </Typography>
+                    <Typography variant="body2">
+                      Monitoring Stations
+                    </Typography>
+                  </Paper>
+                </Grid>
+              </Grid>
+            </Grid>
+          </Grid>
         </Grid>
       </Grid>
     </Container>
