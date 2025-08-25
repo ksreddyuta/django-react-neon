@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from rest_framework import serializers
+from .models import AirQualityData, BatteryData, WeatherData
 
 User = get_user_model()
 
@@ -28,3 +29,24 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             )
         except IntegrityError:
             raise serializers.ValidationError("Email already exists")
+
+# Response serializers for air quality, battery, and weather data
+class AirQualityDataResponseSerializer(serializers.Serializer):
+    timestamp = serializers.DateTimeField()
+    value = serializers.FloatField(allow_null=True)
+    site_name = serializers.CharField()
+    pollutant = serializers.CharField()
+
+class BatteryDataResponseSerializer(serializers.Serializer):
+    timestamp = serializers.DateTimeField()
+    value = serializers.FloatField(allow_null=True)
+    site_name = serializers.CharField()
+
+class WeatherDataResponseSerializer(serializers.Serializer):
+    timestamp = serializers.DateTimeField()
+    temperature = serializers.FloatField(allow_null=True)
+    humidity = serializers.FloatField(allow_null=True)
+    windspeed = serializers.FloatField(allow_null=True)
+    winddirection = serializers.FloatField(allow_null=True)
+    pressure = serializers.FloatField(allow_null=True)
+    solar_radiation = serializers.FloatField(allow_null=True)
