@@ -10,7 +10,10 @@ from .views import (
     get_battery_data,
     get_weather_data,
     get_pollutant_stats,
-    get_battery_stats
+    get_battery_stats,
+    get_device_groups,
+    get_multi_device_data,
+    get_latest_dates  # Add this import
 )
 
 urlpatterns = [
@@ -27,4 +30,9 @@ urlpatterns = [
     path('weather/', get_weather_data, name='get_weather_data'),
     path('stats/air-quality/<str:device>/', get_pollutant_stats, name='get_pollutant_stats'),
     path('stats/battery/<str:device>/', get_battery_stats, name='get_battery_stats'),
+    
+    # New endpoints for advanced features
+    path('device-groups/', get_device_groups, name='get_device_groups'),
+    path('multi-device-data/', get_multi_device_data, name='get_multi_device_data'),
+    path('latest-dates/', get_latest_dates, name='get_latest_dates'),  # Add this line
 ]

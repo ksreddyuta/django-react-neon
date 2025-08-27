@@ -4,11 +4,18 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.permissions import IsAuthenticated
 from .serializers import UserRegistrationSerializer, AirQualityDataResponseSerializer, BatteryDataResponseSerializer, WeatherDataResponseSerializer
 from rest_framework.views import APIView
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, models
 from rest_framework.exceptions import ValidationError
 from .models import AirQualityData, BatteryData, WeatherData
 from datetime import datetime, timedelta
 from rest_framework.decorators import api_view
+import logging
+import csv
+from django.http import HttpResponse
+from io import StringIO
+import json
+
+logger = logging.getLogger(__name__)
 
 class UserRegistrationView(generics.CreateAPIView):
     serializer_class = UserRegistrationSerializer
@@ -60,6 +67,61 @@ class HealthCheck(APIView):
     def get(self, request):
         return Response({"status": "ok", "service": "Django API"})
 
+# Helper function for date parsing
+def parse_date_param(date_str, default=None):
+    if not date_str:
+        return default
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        try:
+            return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
+        except ValueError:
+            return default
+
+# Helper function to get the latest date from a model
+def get_latest_date(model, date_field):
+    try:
+        latest_record = model.objects.order_by(f'-{date_field}').first()
+        if latest_record:
+            return getattr(latest_record, date_field)
+        return datetime.now()
+    except Exception as e:
+        logger.error(f"Error getting latest date from {model.__name__}: {str(e)}")
+        return datetime.now()
+
+# Helper function for export
+def export_data(data, format_type, filename_prefix):
+    if format_type == 'csv':
+        if not data:
+            return HttpResponse("No data to export", status=400)
+        
+        # Create CSV response
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+        
+        # Write CSV data
+        writer = csv.writer(response)
+        
+        # Write headers
+        if data and len(data) > 0:
+            writer.writerow(data[0].keys())
+            
+            # Write data rows
+            for item in data:
+                writer.writerow(item.values())
+        
+        return response
+        
+    elif format_type == 'json':
+        # Create JSON response
+        response = HttpResponse(content_type='application/json')
+        response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"'
+        response.write(json.dumps(data, indent=2, default=str))
+        return response
+    
+    return HttpResponse("Invalid format", status=400)
+
 # Air Quality Data Views
 @api_view(['GET'])
 def get_devices(request):
@@ -77,6 +139,7 @@ def get_devices(request):
         
         return Response(all_devices)
     except Exception as e:
+        logger.error(f"Error in get_devices: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -92,54 +155,129 @@ def get_pollutants(request):
 
 @api_view(['GET'])
 def get_air_quality_data(request, device, pollutant):
-    """Get air quality data for a specific device and pollutant"""
+    """Get air quality data for a specific device and pollutant with advanced filtering"""
     try:
-        # Get days parameter or default to 30
-        days = int(request.GET.get('days', 30))
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        # Get filter parameters
+        days = request.GET.get('days')
+        start_date_str = request.GET.get('start_date')
+        end_date_str = request.GET.get('end_date')
+        min_value = request.GET.get('min')
+        max_value = request.GET.get('max')
+        format_type = request.GET.get('format', 'json')
         
-        # Validate pollutant
-        valid_pollutants = ['VOC', 'O3', 'SO2', 'NO2']
-        if pollutant not in valid_pollutants:
+        # Get the latest date from the table
+        latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
+        
+        # Parse date parameters
+        if days:
+            end_date = latest_date
+            start_date = end_date - timedelta(days=int(days))
+        elif start_date_str and end_date_str:
+            start_date = parse_date_param(start_date_str)
+            end_date = parse_date_param(end_date_str)
+        else:
+            # Default to 30 days from latest date if no date range specified
+            end_date = latest_date
+            start_date = end_date - timedelta(days=30)
+        
+        if not start_date or not end_date:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        # Map pollutant parameter to actual field name
+        field_mapping = {
+            'VOC': 'voc',
+            'O3': 'o3', 
+            'SO2': 'so2',
+            'NO2': 'no2'
+        }
+        
+        if pollutant not in field_mapping:
             return Response({'error': 'Invalid pollutant'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Query data
-        data = AirQualityData.objects.filter(
+        field_name = field_mapping[pollutant]
+        
+        # Build query
+        query = AirQualityData.objects.filter(
             site_name=device,
             reported_time_utc__range=(start_date, end_date)
-        ).values('reported_time_utc', pollutant, 'site_name').order_by('reported_time_utc')
+        )
+        
+        # Apply value filters
+        if min_value:
+            query = query.filter(**{f"{field_name}__gte": float(min_value)})
+        if max_value:
+            query = query.filter(**{f"{field_name}__lte": float(max_value)})
+        
+        # Execute query
+        data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
         
         # Format response
         formatted_data = [
             {
                 'timestamp': item['reported_time_utc'],
-                'value': float(item[pollutant]) if item[pollutant] is not None else None,
+                'value': float(item[field_name]) if item[field_name] is not None else None,
                 'site_name': item['site_name'],
                 'pollutant': pollutant
             }
             for item in data
         ]
         
+        # Handle export requests
+        if format_type in ['csv', 'json'] and format_type != 'json':
+            return export_data(formatted_data, format_type, f"air_quality_{device}_{pollutant}")
+        
         serializer = AirQualityDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
     except Exception as e:
+        logger.error(f"Error in get_air_quality_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 def get_battery_data(request, device):
-    """Get battery data for a specific device"""
+    """Get battery data for a specific device with advanced filtering"""
     try:
-        # Get days parameter or default to 30
-        days = int(request.GET.get('days', 30))
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        # Get filter parameters
+        days = request.GET.get('days')
+        start_date_str = request.GET.get('start_date')
+        end_date_str = request.GET.get('end_date')
+        min_value = request.GET.get('min')
+        max_value = request.GET.get('max')
+        format_type = request.GET.get('format', 'json')
         
-        # Query data
-        data = BatteryData.objects.filter(
+        # Get the latest date from the table
+        latest_date = get_latest_date(BatteryData, 'reported_time_utc')
+        
+        # Parse date parameters
+        if days:
+            end_date = latest_date
+            start_date = end_date - timedelta(days=int(days))
+        elif start_date_str and end_date_str:
+            start_date = parse_date_param(start_date_str)
+            end_date = parse_date_param(end_date_str)
+        else:
+            # Default to 30 days from latest date if no date range specified
+            end_date = latest_date
+            start_date = end_date - timedelta(days=30)
+        
+        if not start_date or not end_date:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build query
+        query = BatteryData.objects.filter(
             site_name=device,
             reported_time_utc__range=(start_date, end_date)
-        ).values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')
+        )
+        
+        # Apply value filters
+        if min_value:
+            query = query.filter(corrected_battery_voltage__gte=float(min_value))
+        if max_value:
+            query = query.filter(corrected_battery_voltage__lte=float(max_value))
+        
+        # Execute query
+        data = query.values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')
         
         # Format response
         formatted_data = [
@@ -151,24 +289,66 @@ def get_battery_data(request, device):
             for item in data
         ]
         
+        # Handle export requests
+        if format_type in ['csv', 'json'] and format_type != 'json':
+            return export_data(formatted_data, format_type, f"battery_{device}")
+        
         serializer = BatteryDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
     except Exception as e:
+        logger.error(f"Error in get_battery_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 def get_weather_data(request):
-    """Get weather data"""
+    """Get weather data with advanced filtering"""
     try:
-        # Get days parameter or default to 30
-        days = int(request.GET.get('days', 30))
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
+        # Get filter parameters
+        days = request.GET.get('days')
+        start_date_str = request.GET.get('start_date')
+        end_date_str = request.GET.get('end_date')
+        min_temp = request.GET.get('min_temp')
+        max_temp = request.GET.get('max_temp')
+        min_humidity = request.GET.get('min_humidity')
+        max_humidity = request.GET.get('max_humidity')
+        format_type = request.GET.get('format', 'json')
         
-        # Query data
-        data = WeatherData.objects.filter(
+        # Get the latest date from the table
+        latest_date = get_latest_date(WeatherData, 'data_time_utc')
+        
+        # Parse date parameters
+        if days:
+            end_date = latest_date
+            start_date = end_date - timedelta(days=int(days))
+        elif start_date_str and end_date_str:
+            start_date = parse_date_param(start_date_str)
+            end_date = parse_date_param(end_date_str)
+        else:
+            # Default to 30 days from latest date if no date range specified
+            end_date = latest_date
+            start_date = end_date - timedelta(days=30)
+        
+        if not start_date or not end_date:
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build query
+        query = WeatherData.objects.filter(
             data_time_utc__range=(start_date, end_date)
-        ).values(
+        )
+        
+        # Apply value filters
+        if min_temp:
+            query = query.filter(temperature__gte=float(min_temp))
+        if max_temp:
+            query = query.filter(temperature__lte=float(max_temp))
+        if min_humidity:
+            query = query.filter(humidity__gte=float(min_humidity))
+        if max_humidity:
+            query = query.filter(humidity__lte=float(max_humidity))
+        
+        # Execute query
+        data = query.values(
             'data_time_utc', 'temperature', 'humidity', 
             'windspeed', 'winddirection', 'pressure', 'solar_radiation'
         ).order_by('data_time_utc')
@@ -187,9 +367,14 @@ def get_weather_data(request):
             for item in data
         ]
         
+        # Handle export requests
+        if format_type in ['csv', 'json'] and format_type != 'json':
+            return export_data(formatted_data, format_type, "weather_data")
+        
         serializer = WeatherDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
     except Exception as e:
+        logger.error(f"Error in get_weather_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -233,6 +418,7 @@ def get_pollutant_stats(request, device):
             
             return Response(stats)
     except Exception as e:
+        logger.error(f"Error in get_pollutant_stats: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -258,4 +444,112 @@ def get_battery_stats(request, device):
             
             return Response(stats)
     except Exception as e:
+        logger.error(f"Error in get_battery_stats: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# New endpoint for device groups
+@api_view(['GET'])
+def get_device_groups(request):
+    """Get predefined device groups"""
+    # This would typically come from a database, but we'll hardcode for now
+    device_groups = {
+        "all_voc_devices": ["UTIS0001-VOC-V6_1"],
+        "all_battery_devices": [
+            "UTIS0001-battery-V6_1", "UTIS0002-battery-V6_1", "UTIS0003-battery-V6_1",
+            "UTIS0004-battery-V6_1", "UTIS0005-battery-V6_1", "UTIS0006-battery-V6_1",
+            "UTIS0007-battery-V6_1", "UTIS0008-battery-V6_1", "UTIS0009-battery-V6_1",
+            "UTIS0010-battery-V6_1", "UTIS0011-battery-V6_1"
+        ],
+        "all_devices": [
+            "UTIS0001-VOC-V6_1", "UTIS0001-battery-V6_1", "UTIS0002-battery-V6_1",
+            "UTIS0003-battery-V6_1", "UTIS0004-battery-V6_1", "UTIS0005-battery-V6_1",
+            "UTIS0006-battery-V6_1", "UTIS0007-battery-V6_1", "UTIS0008-battery-V6_1",
+            "UTIS0009-battery-V6_1", "UTIS0010-battery-V6_1", "UTIS0011-battery-V6_1"
+        ]
+    }
+    return Response(device_groups)
+
+# New endpoint for multi-device data
+@api_view(['GET'])
+def get_multi_device_data(request):
+    """Get data for multiple devices"""
+    try:
+        devices = request.GET.get('devices', '').split(',')
+        pollutant = request.GET.get('pollutant', 'VOC')
+        days = request.GET.get('days', 30)
+        format_type = request.GET.get('format', 'json')
+        
+        if not devices or not devices[0]:
+            return Response({'error': 'No devices specified'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get the latest date from the table
+        latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
+        end_date = latest_date
+        start_date = end_date - timedelta(days=int(days))
+        
+        # Map pollutant parameter to actual field name
+        field_mapping = {
+            'VOC': 'voc',
+            'O3': 'o3', 
+            'SO2': 'so2',
+            'NO2': 'no2'
+        }
+        
+        if pollutant not in field_mapping:
+            return Response({'error': 'Invalid pollutant'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        field_name = field_mapping[pollutant]
+        
+        # Query data for all devices
+        all_data = []
+        for device in devices:
+            data = AirQualityData.objects.filter(
+                site_name=device.strip(),
+                reported_time_utc__range=(start_date, end_date)
+            ).values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
+            
+            # Format response
+            formatted_data = [
+                {
+                    'timestamp': item['reported_time_utc'],
+                    'value': float(item[field_name]) if item[field_name] is not None else None,
+                    'site_name': item['site_name'],
+                    'pollutant': pollutant
+                }
+                for item in data
+            ]
+            
+            all_data.extend(formatted_data)
+        
+        # Handle export requests
+        if format_type in ['csv', 'json'] and format_type != 'json':
+            return export_data(all_data, format_type, f"multi_device_{pollutant}")
+        
+        return Response(all_data)
+    except Exception as e:
+        logger.error(f"Error in get_multi_device_data: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# New endpoint to get the latest date for each table
+@api_view(['GET'])
+def get_latest_dates(request):
+    """Get the latest date available in each table"""
+    try:
+        latest_dates = {
+            "air_quality": get_latest_date(AirQualityData, 'reported_time_utc'),
+            "battery": get_latest_date(BatteryData, 'reported_time_utc'),
+            "weather": get_latest_date(WeatherData, 'data_time_utc')
+        }
+        
+        # Format dates for response
+        formatted_dates = {}
+        for key, value in latest_dates.items():
+            if isinstance(value, datetime):
+                formatted_dates[key] = value.isoformat()
+            else:
+                formatted_dates[key] = value
+        
+        return Response(formatted_dates)
+    except Exception as e:
+        logger.error(f"Error in get_latest_dates: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
