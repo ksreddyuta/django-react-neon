@@ -13,7 +13,9 @@ from .views import (
     get_battery_stats,
     get_device_groups,
     get_multi_device_data,
-    get_latest_dates  # Add this import
+    get_latest_dates,
+    create_device_group,
+    add_device_to_group
 )
 
 urlpatterns = [
@@ -34,5 +36,7 @@ urlpatterns = [
     # New endpoints for advanced features
     path('device-groups/', get_device_groups, name='get_device_groups'),
     path('multi-device-data/', get_multi_device_data, name='get_multi_device_data'),
-    path('latest-dates/', get_latest_dates, name='get_latest_dates'),  # Add this line
+    path('latest-dates/', get_latest_dates, name='get_latest_dates'),
+    path('device-groups/create/', create_device_group, name='create_device_group'),
+    path('device-groups/<int:group_id>/add-device/', add_device_to_group, name='add_device_to_group'),
 ]

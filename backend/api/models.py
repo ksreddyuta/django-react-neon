@@ -98,3 +98,24 @@ class THData(models.Model):
     class Meta:
         db_table = '"AirQualityData-TH-V6_1"'
         managed = False
+
+# Device Group Models
+class DeviceGroup(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+class DeviceGroupMember(models.Model):
+    group = models.ForeignKey(DeviceGroup, on_delete=models.CASCADE, related_name='members')
+    device_name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('group', 'device_name')
+
+    def __str__(self):
+        return f"{self.device_name} in {self.group.name}"
