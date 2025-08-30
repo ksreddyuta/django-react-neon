@@ -1,4 +1,5 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     UserRegistrationView, 
     CustomTokenObtainPairView, 
@@ -15,14 +16,21 @@ from .views import (
     get_multi_device_data,
     get_latest_dates,
     create_device_group,
-    add_device_to_group
+    add_device_to_group,
+    UserListView,
+    UserDetailView
 )
 
 urlpatterns = [
     path('register/', UserRegistrationView.as_view(), name='register'),
     path('login/', CustomTokenObtainPairView.as_view(), name='login'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('protected/', ProtectedView.as_view(), name='protected'),
     path('health/', HealthCheck.as_view(), name='health'),
+    
+    # User management endpoints (superadmin only)
+    path('users/', UserListView.as_view(), name='user-list'),
+    path('users/<int:pk>/', UserDetailView.as_view(), name='user-detail'),
     
     # Air quality data endpoints
     path('devices/', get_devices, name='get_devices'),

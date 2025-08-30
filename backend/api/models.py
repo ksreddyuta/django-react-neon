@@ -1,11 +1,67 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
+from django.core.exceptions import ValidationError
+import re
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('The Email must be set')
+        
+        # Validate email format
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            raise ValueError('Enter a valid email address')
+            
         email = self.normalize_email(email)
+        
+        # Check for duplicate email
+        if self.model.objects.filter(email=email).exists():
+            raise ValueError('Email already exists')
+        
+        # Generate username from email if not provided
+        if 'username' not in extra_fields or not extra_fields['username']:
+            extra_fields['username'] = email.split('@')[0]
+        
+        # Validate password
+        if password:
+            if len(password) < 8:
+                raise ValueError('Password must be at least 8 characters long')
+            if not re.search(r'[A-Z]', password):
+                raise ValueError('Password must contain at least one uppercase letter')
+            if not re.search(r'[0-9]', password):
+                raise ValueError('Password must contain at least one number')
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+                raise ValueError('Password must contain at least one special character')
+        
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save()
+        return user
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError('The Email must be set')
+        
+        # Validate email format
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            raise ValueError('Enter a valid email address')
+            
+        email = self.normalize_email(email)
+        
+        # Check for duplicate email
+        if self.model.objects.filter(email=email).exists():
+            raise ValueError('Email already exists')
+        
+        # Validate password
+        if password:
+            if len(password) < 8:
+                raise ValueError('Password must be at least 8 characters long')
+            if not re.search(r'[A-Z]', password):
+                raise ValueError('Password must contain at least one uppercase letter')
+            if not re.search(r'[0-9]', password):
+                raise ValueError('Password must contain at least one number')
+            if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+                raise ValueError('Password must contain at least one special character')
+        
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save()
@@ -15,6 +71,7 @@ class CustomUserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('role', 'superadmin')
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
@@ -23,10 +80,18 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
+    ROLE_CHOICES = (
+        ('user', 'Normal User'),
+        ('admin', 'Admin'),
+        ('superadmin', 'Super Admin'),
+    )
+    
     email = models.EmailField('email address', unique=True)
+    username = models.CharField(max_length=150, blank=True)
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(auto_now_add=True)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='user')
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
@@ -35,6 +100,21 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    def is_admin(self):
+        return self.role in ['admin', 'superadmin']
+    
+    def is_superadmin(self):
+        return self.role == 'superadmin'
+
+    def clean(self):
+        # Validate email format
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', self.email):
+            raise ValidationError('Enter a valid email address')
+        
+        # Check for duplicate email
+        if CustomUser.objects.filter(email=self.email).exclude(pk=self.pk).exists():
+            raise ValidationError('Email already exists')
 
 # Air Quality Data Model
 class AirQualityData(models.Model):

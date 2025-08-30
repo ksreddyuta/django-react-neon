@@ -1,19 +1,30 @@
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework.permissions import IsAuthenticated
-from .serializers import UserRegistrationSerializer, AirQualityDataResponseSerializer, BatteryDataResponseSerializer, WeatherDataResponseSerializer
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from django.db import IntegrityError, connection, models
 from rest_framework.exceptions import ValidationError
-from .models import AirQualityData, BatteryData, WeatherData, DeviceGroup, DeviceGroupMember
-from datetime import datetime, timedelta
 from rest_framework.decorators import api_view, permission_classes
 import logging
 import csv
 from django.http import HttpResponse
-from io import StringIO
 import json
+from datetime import datetime, timedelta
+import os
+from django.conf import settings
+from rest_framework_csv.renderers import CSVRenderer
+
+from .serializers import (
+    UserRegistrationSerializer, 
+    UserSerializer, 
+    UserUpdateSerializer,
+    AirQualityDataResponseSerializer,
+    BatteryDataResponseSerializer,
+    WeatherDataResponseSerializer
+)
+from .models import AirQualityData, BatteryData, WeatherData, DeviceGroup, DeviceGroupMember, CustomUser
+from .permissions import IsAdminUser, IsSuperAdminUser, CanExportData
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +41,16 @@ class UserRegistrationView(generics.CreateAPIView):
                 status=status.HTTP_201_CREATED
             )
         except ValidationError as e:
-            # Handle serializer validation errors
             return Response(
                 {"error": str(e.detail)},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except IntegrityError:
-            # Handle duplicate email error
             return Response(
                 {"error": "Email already exists"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
-            # Handle other unexpected errors
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -60,14 +68,46 @@ class ProtectedView(APIView):
     
     def get(self, request):
         return Response({
-            "message": f"Hello {request.user.email}! This is a protected endpoint."
+            "message": f"Hello {request.user.email}! This is a protected endpoint.",
+            "user": {
+                "email": request.user.email,
+                "username": request.user.username,
+                "role": request.user.role
+            }
         })
 
 class HealthCheck(APIView):
     def get(self, request):
         return Response({"status": "ok", "service": "Django API"})
 
-# Helper function for date parsing
+class UserListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdminUser]
+    serializer_class = UserSerializer
+    queryset = CustomUser.objects.all()
+
+class UserDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdminUser]
+    serializer_class = UserUpdateSerializer
+    queryset = CustomUser.objects.all()
+
+    def update(self, request, *args, **kwargs):
+        try:
+            user = self.get_object()
+            if 'role' in request.data and not request.user.is_superadmin():
+                return Response(
+                    {'error': 'Only superadmin can change user roles'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            serializer = self.get_serializer(user, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            
+            return Response(UserSerializer(user).data)
+        except Exception as e:
+            logger.error(f"Error updating user: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 def parse_date_param(date_str, default=None):
     if not date_str:
         return default
@@ -79,10 +119,8 @@ def parse_date_param(date_str, default=None):
         except ValueError:
             return default
 
-# Helper function to get the latest date from a model
 def get_latest_date(model, date_field):
     try:
-        # Use aggregation to get the maximum date more efficiently
         latest_date = model.objects.aggregate(
             max_date=models.Max(date_field)
         )['max_date']
@@ -94,85 +132,50 @@ def get_latest_date(model, date_field):
         logger.error(f"Error getting latest date from {model.__name__}: {str(e)}")
         return datetime.now()
 
-# Helper function for export with admin check
-# Helper function for export with admin check
-def export_data(request, data, format_type, filename_prefix):
-    # Check if user is admin
-    if not request.user.is_staff and not request.user.is_superuser:
+def export_data(request, data, filename_prefix):
+    if not request.user.is_admin():
+        logger.warning(f"Export denied for user {request.user.email} - admin required")
         return Response(
             {'error': 'Permission denied. Admin access required for export.'},
             status=status.HTTP_403_FORBIDDEN
         )
     
-    if format_type == 'csv':
-        if not data:
-            return Response({'error': 'No data to export'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Create CSV response
-            response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
-            
-            # Write CSV data
-            writer = csv.writer(response)
-            
-            # Write headers
-            if data and len(data) > 0:
-                # Get all unique keys from all objects
-                all_keys = set()
-                for item in data:
-                    all_keys.update(item.keys())
-                writer.writerow(all_keys)
-                
-                # Write data rows
-                for item in data:
-                    row = []
-                    for key in all_keys:
-                        value = item.get(key, '')
-                        # Convert datetime objects to string
-                        if isinstance(value, datetime):
-                            value = value.isoformat()
-                        row.append(value)
-                    writer.writerow(row)
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error generating CSV: {str(e)}")
-            return Response(
-                {'error': f'Failed to generate CSV: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-    elif format_type == 'json':
-        try:
-            # Create JSON response
-            response = HttpResponse(
-                json.dumps(data, indent=2, default=str),
-                content_type='application/json'
-            )
-            response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"'
-            return response
-            
-        except Exception as e:
-            logger.error(f"Error generating JSON: {str(e)}")
-            return Response(
-                {'error': f'Failed to generate JSON: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+    if not data:
+        logger.warning(f"Export failed: No data to export for {filename_prefix}")
+        return Response({'error': 'No data to export'}, status=status.HTTP_400_BAD_REQUEST)
     
-    return Response({'error': 'Invalid format'}, status=status.HTTP_400_BAD_REQUEST)
-@api_view(['GET'])
-def get_devices(request):
-    """Get all unique devices from all tables"""
     try:
-        # Get devices from VOC table
-        voc_devices = AirQualityData.objects.values_list('site_name', flat=True).distinct()
+        logger.info(f"Starting CSV export for {filename_prefix} with {len(data)} records")
         
-        # Get devices from battery table
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+        
+        writer = csv.writer(response)
+        
+        if data and len(data) > 0:
+            headers = data[0].keys()
+            writer.writerow(headers)
+            
+            for item in data:
+                writer.writerow(item.values())
+        
+        logger.info(f"CSV export completed successfully for {filename_prefix}")
+        return response
+            
+    except Exception as e:
+        logger.error(f"Error generating CSV for {filename_prefix}: {str(e)}", exc_info=True)
+        return Response(
+            {'error': f'Failed to generate CSV: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_devices(request):
+    try:
+        voc_devices = AirQualityData.objects.values_list('site_name', flat=True).distinct()
         battery_devices = BatteryData.objects.values_list('site_name', flat=True).distinct()
         
-        # Combine and deduplicate
         all_devices = list(set(list(voc_devices) + list(battery_devices)))
         all_devices.sort()
         
@@ -182,8 +185,8 @@ def get_devices(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def get_pollutants(request):
-    """Get available pollutants"""
     pollutants = [
         {'id': 'VOC', 'name': 'Volatile Organic Compounds', 'unit': 'ppb'},
         {'id': 'O3', 'name': 'Ozone', 'unit': 'ppb'},
@@ -193,11 +196,11 @@ def get_pollutants(request):
     return Response(pollutants)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanExportData])
 def get_air_quality_data(request, device, pollutant):
-    """Get air quality data for a specific device and pollutant with advanced filtering"""
     try:
-        # Get filter parameters
+        logger.info(f"Air quality data request - Device: {device}, Pollutant: {pollutant}")
+        
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -205,10 +208,8 @@ def get_air_quality_data(request, device, pollutant):
         max_value = request.GET.get('max')
         format_type = request.GET.get('format', 'json')
         
-        # Get the latest date from the table
         latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
         
-        # Parse date parameters
         if days:
             end_date = latest_date
             start_date = end_date - timedelta(days=int(days))
@@ -216,15 +217,14 @@ def get_air_quality_data(request, device, pollutant):
             start_date = parse_date_param(start_date_str)
             end_date = parse_date_param(end_date_str)
         else:
-            # Default to 30 days from latest date if no date range specified
             end_date = latest_date
             start_date = end_date - timedelta(days=30)
         
         if not start_date or not end_date:
+            logger.warning(f"Invalid date format - start_date: {start_date_str}, end_date: {end_date_str}")
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        # Map pollutant parameter to actual field name
         field_mapping = {
             'VOC': 'voc',
             'O3': 'o3', 
@@ -233,26 +233,23 @@ def get_air_quality_data(request, device, pollutant):
         }
         
         if pollutant not in field_mapping:
+            logger.warning(f"Invalid pollutant requested: {pollutant}")
             return Response({'error': 'Invalid pollutant'}, status=status.HTTP_400_BAD_REQUEST)
         
         field_name = field_mapping[pollutant]
         
-        # Build query
         query = AirQualityData.objects.filter(
             site_name=device,
             reported_time_utc__range=(start_date, end_date)
         )
         
-        # Apply value filters
         if min_value:
             query = query.filter(**{f"{field_name}__gte": float(min_value)})
         if max_value:
-            query = query.filter(**{f"{field_name}__lte": float(max_value)})
+            query = query.filter(**{f"{field_name}__lete": float(max_value)})
         
-        # Execute query
         data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
         
-        # Format response
         formatted_data = [
             {
                 'timestamp': item['reported_time_utc'],
@@ -263,22 +260,22 @@ def get_air_quality_data(request, device, pollutant):
             for item in data
         ]
         
-        # Handle export requests
-        if format_type in ['csv', 'json'] and format_type != 'json':
-            return export_data(request, formatted_data, format_type, f"air_quality_{device}_{pollutant}")
+        if format_type == 'csv':
+            logger.info(f"Processing CSV export for {device} {pollutant}")
+            return export_data(request, formatted_data, f"air_quality_{device}_{pollutant}")
         
         serializer = AirQualityDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
     except Exception as e:
-        logger.error(f"Error in get_air_quality_data: {str(e)}")
+        logger.error(f"Error in get_air_quality_data: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanExportData])
 def get_battery_data(request, device):
-    """Get battery data for a specific device with advanced filtering"""
     try:
-        # Get filter parameters
+        logger.info(f"Battery data request - Device: {device}")
+        
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -286,10 +283,8 @@ def get_battery_data(request, device):
         max_value = request.GET.get('max')
         format_type = request.GET.get('format', 'json')
         
-        # Get the latest date from the table
         latest_date = get_latest_date(BatteryData, 'reported_time_utc')
         
-        # Parse date parameters
         if days:
             end_date = latest_date
             start_date = end_date - timedelta(days=int(days))
@@ -297,30 +292,26 @@ def get_battery_data(request, device):
             start_date = parse_date_param(start_date_str)
             end_date = parse_date_param(end_date_str)
         else:
-            # Default to 30 days from latest date if no date range specified
             end_date = latest_date
             start_date = end_date - timedelta(days=30)
         
         if not start_date or not end_date:
+            logger.warning(f"Invalid date format - start_date: {start_date_str}, end_date: {end_date_str}")
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        # Build query
         query = BatteryData.objects.filter(
             site_name=device,
             reported_time_utc__range=(start_date, end_date)
         )
         
-        # Apply value filters
         if min_value:
             query = query.filter(corrected_battery_voltage__gte=float(min_value))
         if max_value:
             query = query.filter(corrected_battery_voltage__lte=float(max_value))
         
-        # Execute query
         data = query.values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')
         
-        # Format response
         formatted_data = [
             {
                 'timestamp': item['reported_time_utc'],
@@ -330,9 +321,9 @@ def get_battery_data(request, device):
             for item in data
         ]
         
-        # Handle export requests
-        if format_type in ['csv', 'json'] and format_type != 'json':
-            return export_data(request, formatted_data, format_type, f"battery_{device}")
+        if format_type == 'csv':
+            logger.info(f"Processing CSV export for {device}")
+            return export_data(request, formatted_data, f"battery_{device}")
         
         serializer = BatteryDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
@@ -341,11 +332,11 @@ def get_battery_data(request, device):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanExportData])
 def get_weather_data(request):
-    """Get weather data with advanced filtering"""
     try:
-        # Get filter parameters
+        logger.info(f"Weather data request")
+        
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -355,10 +346,8 @@ def get_weather_data(request):
         max_humidity = request.GET.get('max_humidity')
         format_type = request.GET.get('format', 'json')
         
-        # Get the latest date from the table
         latest_date = get_latest_date(WeatherData, 'data_time_utc')
         
-        # Parse date parameters
         if days:
             end_date = latest_date
             start_date = end_date - timedelta(days=int(days))
@@ -366,20 +355,18 @@ def get_weather_data(request):
             start_date = parse_date_param(start_date_str)
             end_date = parse_date_param(end_date_str)
         else:
-            # Default to 30 days from latest date if no date range specified
             end_date = latest_date
             start_date = end_date - timedelta(days=30)
         
         if not start_date or not end_date:
+            logger.warning(f"Invalid date format - start_date: {start_date_str}, end_date: {end_date_str}")
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        # Build query
         query = WeatherData.objects.filter(
             data_time_utc__range=(start_date, end_date)
         )
         
-        # Apply value filters
         if min_temp:
             query = query.filter(temperature__gte=float(min_temp))
         if max_temp:
@@ -389,13 +376,11 @@ def get_weather_data(request):
         if max_humidity:
             query = query.filter(humidity__lte=float(max_humidity))
         
-        # Execute query
         data = query.values(
             'data_time_utc', 'temperature', 'humidity', 
             'windspeed', 'winddirection', 'pressure', 'solar_radiation'
         ).order_by('data_time_utc')
         
-        # Format response
         formatted_data = [
             {
                 'timestamp': item['data_time_utc'],
@@ -409,9 +394,9 @@ def get_weather_data(request):
             for item in data
         ]
         
-        # Handle export requests
-        if format_type in ['csv', 'json'] and format_type != 'json':
-            return export_data(request, formatted_data, format_type, "weather_data")
+        if format_type == 'csv':
+            logger.info(f"Processing CSV export for weather data")
+            return export_data(request, formatted_data, "weather_data")
         
         serializer = WeatherDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
@@ -420,9 +405,10 @@ def get_weather_data(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def get_pollutant_stats(request, device):
-    """Get statistics for all pollutants for a device"""
     try:
+        logger.info(f"Pollutant stats request - Device: {device}")
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT 
@@ -458,15 +444,17 @@ def get_pollutant_stats(request, device):
                         'avg': float(row[11]) if row[11] is not None else None},
             }
             
+            logger.info(f"Pollutant stats retrieved for {device}")
             return Response(stats)
     except Exception as e:
         logger.error(f"Error in get_pollutant_stats: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def get_battery_stats(request, device):
-    """Get statistics for battery voltage for a device"""
     try:
+        logger.info(f"Battery stats request - Device: {device}")
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT 
@@ -484,46 +472,45 @@ def get_battery_stats(request, device):
                 'avg': float(row[2]) if row[2] is not None else None,
             }
             
+            logger.info(f"Battery stats retrieved for {device}")
             return Response(stats)
     except Exception as e:
         logger.error(f"Error in get_battery_stats: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# Device Group Views
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def get_device_groups(request):
-    """Get device groups from database"""
     try:
-        # Get all device groups
+        logger.info(f"Device groups request")
         groups = DeviceGroup.objects.all()
         device_groups = {}
         
         for group in groups:
-            # Get all device names for this group
             device_names = list(DeviceGroupMember.objects.filter(
                 group=group
             ).values_list('device_name', flat=True))
             
             device_groups[group.name] = device_names
         
+        logger.info(f"Device groups retrieved: {len(groups)} groups")
         return Response(device_groups)
     except Exception as e:
         logger.error(f"Error in get_device_groups: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsAdminUser])
 def create_device_group(request):
-    """Create a new device group"""
     try:
+        logger.info(f"Create device group request")
         name = request.data.get('name')
         description = request.data.get('description', '')
         devices = request.data.get('devices', [])
         
         if not name:
-            return Response({'error': 'Group name is required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Group name is required'}, status=status.HTTP_400_BRED_REQUEST)
         
-        # Create the group
         group, created = DeviceGroup.objects.get_or_create(
             name=name,
             defaults={'description': description}
@@ -532,13 +519,13 @@ def create_device_group(request):
         if not created:
             return Response({'error': 'Group already exists'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Add devices to the group
         for device in devices:
             DeviceGroupMember.objects.get_or_create(
                 group=group,
                 device_name=device
             )
         
+        logger.info(f"Device group created: {name}")
         return Response({'message': f'Device group {name} created successfully'}, status=status.HTTP_201_CREATED)
     
     except Exception as e:
@@ -546,42 +533,42 @@ def create_device_group(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsAdminUser])
 def add_device_to_group(request, group_id):
-    """Add a device to a group"""
     try:
+        logger.info(f"Add device to group request - Group ID: {group_id}")
         device_name = request.data.get('device_name')
         
         if not device_name:
             return Response({'error': 'Device name is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get the group
         try:
             group = DeviceGroup.objects.get(id=group_id)
         except DeviceGroup.DoesNotExist:
             return Response({'error': 'Device group not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Add the device to the group
         member, created = DeviceGroupMember.objects.get_or_create(
             group=group,
             device_name=device_name
         )
         
         if created:
+            logger.info(f"Device {device_name} added to group {group.name}")
             return Response({'message': f'Device {device_name} added to group {group.name}'}, status=status.HTTP_201_CREATED)
         else:
+            logger.info(f"Device {device_name} already in group {group.name}")
             return Response({'message': f'Device {device_name} already in group {group.name}'}, status=status.HTTP_200_OK)
     
     except Exception as e:
         logger.error(f"Error in add_device_to_group: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# New endpoint for multi-device data
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanExportData])
 def get_multi_device_data(request):
-    """Get data for multiple devices"""
     try:
+        logger.info(f"Multi-device data request")
+        
         devices = request.GET.get('devices', '').split(',')
         pollutant = request.GET.get('pollutant', 'VOC')
         days = request.GET.get('days', 30)
@@ -590,12 +577,10 @@ def get_multi_device_data(request):
         if not devices or not devices[0]:
             return Response({'error': 'No devices specified'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get the latest date from the table
         latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
         end_date = latest_date
         start_date = end_date - timedelta(days=int(days))
         
-        # Map pollutant parameter to actual field name
         field_mapping = {
             'VOC': 'voc',
             'O3': 'o3', 
@@ -604,11 +589,11 @@ def get_multi_device_data(request):
         }
         
         if pollutant not in field_mapping:
+            logger.warning(f"Invalid pollutant requested: {pollutant}")
             return Response({'error': 'Invalid pollutant'}, status=status.HTTP_400_BAD_REQUEST)
         
         field_name = field_mapping[pollutant]
         
-        # Query data for all devices
         all_data = []
         for device in devices:
             data = AirQualityData.objects.filter(
@@ -616,7 +601,6 @@ def get_multi_device_data(request):
                 reported_time_utc__range=(start_date, end_date)
             ).values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
             
-            # Format response
             formatted_data = [
                 {
                     'timestamp': item['reported_time_utc'],
@@ -627,29 +611,28 @@ def get_multi_device_data(request):
                 for item in data
             ]
             
-            all_data.extend(formatted_data)  # Fixed the typo here
+            all_data.extend(formatted_data)
         
-        # Handle export requests
-        if format_type in ['csv', 'json'] and format_type != 'json':
-            return export_data(request, all_data, format_type, f"multi_device_{pollutant}")
+        if format_type == 'csv':
+            logger.info(f"Processing CSV export for multi-device data")
+            return export_data(request, all_data, f"multi_device_{pollutant}")
         
         return Response(all_data)
     except Exception as e:
         logger.error(f"Error in get_multi_device_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-# New endpoint to get the latest date for each table
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def get_latest_dates(request):
-    """Get the latest date available in each table"""
     try:
+        logger.info(f"Latest dates request")
         latest_dates = {
             "air_quality": get_latest_date(AirQualityData, 'reported_time_utc'),
             "battery": get_latest_date(BatteryData, 'reported_time_utc'),
             "weather": get_latest_date(WeatherData, 'data_time_utc')
         }
         
-        # Format dates for response
         formatted_dates = {}
         for key, value in latest_dates.items():
             if isinstance(value, datetime):
@@ -657,6 +640,7 @@ def get_latest_dates(request):
             else:
                 formatted_dates[key] = value
         
+        logger.info(f"Latest dates retrieved")
         return Response(formatted_dates)
     except Exception as e:
         logger.error(f"Error in get_latest_dates: {str(e)}")

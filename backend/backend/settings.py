@@ -10,6 +10,7 @@ dotenv.load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-key')
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+# DEBUG = 'True'
 
 ALLOWED_HOSTS = ['*']
 
@@ -24,6 +25,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'rest_framework_csv',  # Add CSV support
 ]
 
 AUTH_USER_MODEL = 'api.CustomUser'
@@ -76,7 +78,7 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
         "OPTIONS": {
-            "min_length": 8,  # you can increase this (e.g., 12) for stronger security
+            "min_length": 8,
         }
     },
     {
@@ -91,7 +93,11 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+        'rest_framework_csv.renderers.CSVRenderer',  # Add CSV renderer
+    ],
 }
 
 SIMPLE_JWT = {
@@ -102,8 +108,8 @@ SIMPLE_JWT = {
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
-    "http://localhost:5173",  # React dev server
-    "https://django-react-neon.vercel.app",  # Your production frontend
+    "http://localhost:5173",
+    "https://django-react-neon.vercel.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
