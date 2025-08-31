@@ -1,3 +1,4 @@
+import os
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -8,12 +9,9 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view, permission_classes
 import logging
 import csv
-from django.http import HttpResponse
-import json
+from django.http import FileResponse, HttpResponse
 from datetime import datetime, timedelta
-import os
-from django.conf import settings
-from rest_framework_csv.renderers import CSVRenderer
+import time
 
 from .serializers import (
     UserRegistrationSerializer, 
@@ -23,12 +21,14 @@ from .serializers import (
     BatteryDataResponseSerializer,
     WeatherDataResponseSerializer
 )
-from .models import AirQualityData, BatteryData, WeatherData, DeviceGroup, DeviceGroupMember, CustomUser
+from .models import AirQualityData, BatteryData, ExportedFile, WeatherData, DeviceGroup, DeviceGroupMember, CustomUser
 from .permissions import IsAdminUser, IsSuperAdminUser, CanExportData
+from .file_services import generate_export_filename, save_data_to_csv, create_export_record, get_export_download_url
 
 logger = logging.getLogger(__name__)
 
 class UserRegistrationView(generics.CreateAPIView):
+    permission_classes = [AllowAny] 
     serializer_class = UserRegistrationSerializer
     
     def create(self, request, *args, **kwargs):
@@ -71,12 +71,12 @@ class ProtectedView(APIView):
             "message": f"Hello {request.user.email}! This is a protected endpoint.",
             "user": {
                 "email": request.user.email,
-                "username": request.user.username,
                 "role": request.user.role
             }
         })
 
 class HealthCheck(APIView):
+    permission_classes = [AllowAny] 
     def get(self, request):
         return Response({"status": "ok", "service": "Django API"})
 
@@ -132,7 +132,9 @@ def get_latest_date(model, date_field):
         logger.error(f"Error getting latest date from {model.__name__}: {str(e)}")
         return datetime.now()
 
-def export_data(request, data, filename_prefix):
+# Replace the export_data function with this new version
+def export_data(request, data, filename_prefix, file_type, device_id=None, pollutant=None):
+    """Save data to a physical CSV file and return download information"""
     if not request.user.is_admin():
         logger.warning(f"Export denied for user {request.user.email} - admin required")
         return Response(
@@ -145,22 +147,30 @@ def export_data(request, data, filename_prefix):
         return Response({'error': 'No data to export'}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        logger.info(f"Starting CSV export for {filename_prefix} with {len(data)} records")
+        # Generate filename and save data
+        filename = generate_export_filename(filename_prefix)
+        file_path = save_data_to_csv(data, filename, file_type)
         
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = f'attachment; filename="{filename_prefix}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+        if not file_path:
+            return Response({'error': 'Failed to create CSV file'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        writer = csv.writer(response)
+        # Create export record
+        exported_file = create_export_record(
+            request, file_path, filename, file_type, device_id, pollutant
+        )
         
-        if data and len(data) > 0:
-            headers = data[0].keys()
-            writer.writerow(headers)
-            
-            for item in data:
-                writer.writerow(item.values())
+        # Return download information instead of the file content
+        download_url = get_export_download_url(exported_file)
         
-        logger.info(f"CSV export completed successfully for {filename_prefix}")
-        return response
+        logger.info(f"CSV export completed successfully for {filename_prefix}, file ID: {exported_file.id}")
+        
+        return Response({
+            'message': 'Export completed successfully',
+            'file_id': exported_file.id,
+            'filename': filename,
+            'download_url': download_url,
+            'expires_at': exported_file.expires_at
+        })
             
     except Exception as e:
         logger.error(f"Error generating CSV for {filename_prefix}: {str(e)}", exc_info=True)
@@ -168,18 +178,64 @@ def export_data(request, data, filename_prefix):
             {'error': f'Failed to generate CSV: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def download_exported_file(request, file_id):
+    """Serve an exported file for download"""
+    try:
+        exported_file = ExportedFile.objects.get(id=file_id, created_by=request.user)
+        
+        # Check if file exists and hasn't expired
+        if exported_file.is_expired():
+            return Response({'error': 'File has expired'}, status=status.HTTP_410_GONE)
+        
+        if not os.path.exists(exported_file.file_path):
+            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Serve the file for download
+        response = FileResponse(open(exported_file.file_path, 'rb'))
+        response['Content-Disposition'] = f'attachment; filename="{exported_file.filename}"'
+        response['Content-Type'] = 'text/csv'
+        
+        return response
+    except ExportedFile.DoesNotExist:
+        return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_devices(request):
     try:
+        # Get devices from both tables
         voc_devices = AirQualityData.objects.values_list('site_name', flat=True).distinct()
         battery_devices = BatteryData.objects.values_list('site_name', flat=True).distinct()
         
+        # Combine and deduplicate
         all_devices = list(set(list(voc_devices) + list(battery_devices)))
         all_devices.sort()
         
-        return Response(all_devices)
+        # Create unique device objects with type information
+        device_objects = []
+        for device in all_devices:
+            # Determine device type based on name pattern
+            if 'VOC' in device:
+                device_type = 'air_quality'
+                unique_id = f"aq_{device}"  # Prefix for air quality devices
+            elif 'battery' in device:
+                device_type = 'battery'
+                unique_id = f"bat_{device}"  # Prefix for battery devices
+            else:
+                device_type = 'unknown'
+                unique_id = f"unk_{device}"  # Prefix for unknown devices
+                
+            device_objects.append({
+                'id': unique_id,           # Unique identifier for React keys
+                'name': device,            # Original device name
+                'type': device_type,       # Device type for frontend filtering
+                'display_name': device.replace('-VOC-V6_1', '').replace('-battery-V6_1', '')  # Clean name for UI
+            })
+        
+        return Response(device_objects)
     except Exception as e:
         logger.error(f"Error in get_devices: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -197,9 +253,20 @@ def get_pollutants(request):
 
 @api_view(['GET'])
 @permission_classes([CanExportData])
-def get_air_quality_data(request, device, pollutant):
+def get_air_quality_data(request, device_id, pollutant):
     try:
-        logger.info(f"Air quality data request - Device: {device}, Pollutant: {pollutant}")
+        # Extract the actual device name from the ID
+        if device_id.startswith('aq_'):
+            device_name = device_id[3:]  # Remove the "aq_" prefix
+        else:
+            # Handle invalid device IDs
+            return Response({'error': 'Invalid device ID for air quality data'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        logger.info(f"Air quality data request - Device: {device_name}, Pollutant: {pollutant}")
+        
+        # Start timing the request
+        start_time = time.time()
         
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
@@ -238,43 +305,73 @@ def get_air_quality_data(request, device, pollutant):
         
         field_name = field_mapping[pollutant]
         
+        # Use device_name in the query
         query = AirQualityData.objects.filter(
-            site_name=device,
+            site_name=device_name,
             reported_time_utc__range=(start_date, end_date)
         )
         
         if min_value:
             query = query.filter(**{f"{field_name}__gte": float(min_value)})
         if max_value:
-            query = query.filter(**{f"{field_name}__lete": float(max_value)})
+            query = query.filter(**{f"{field_name}__lte": float(max_value)})
         
+        # Time the database query
+        query_start = time.time()
         data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
+        query_time = time.time() - query_start
         
         formatted_data = [
             {
                 'timestamp': item['reported_time_utc'],
                 'value': float(item[field_name]) if item[field_name] is not None else None,
                 'site_name': item['site_name'],
-                'pollutant': pollutant
+                'pollutant': pollutant,
+                'device_id': device_id  # Include the device ID in the response
             }
             for item in data
         ]
         
+        # Log performance
+        total_time = time.time() - start_time
+        logger.info(
+            f"Air quality query - Device: {device_name}, Pollutant: {pollutant}, "
+            f"Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
+            f"Records: {len(data)}"
+        )
+        
         if format_type == 'csv':
-            logger.info(f"Processing CSV export for {device} {pollutant}")
-            return export_data(request, formatted_data, f"air_quality_{device}_{pollutant}")
+            logger.info(f"Processing CSV export for {device_name} {pollutant}")
+            return export_data(
+                request, 
+                formatted_data, 
+                f"air_quality_{device_name}_{pollutant}",
+                'air_quality',
+                device_id,
+                pollutant
+            )
         
         serializer = AirQualityDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
     except Exception as e:
         logger.error(f"Error in get_air_quality_data: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+    
 @api_view(['GET'])
 @permission_classes([CanExportData])
-def get_battery_data(request, device):
+def get_battery_data(request, device_id):
     try:
-        logger.info(f"Battery data request - Device: {device}")
+        # Extract the actual device name from the ID
+        if device_id.startswith('bat_'):
+            device_name = device_id[4:]  # Remove the "bat_" prefix
+        else:
+            return Response({'error': 'Invalid device ID for battery data'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        logger.info(f"Battery data request - Device: {device_name}")
+        
+        # Start timing the request
+        start_time = time.time()
         
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
@@ -300,8 +397,9 @@ def get_battery_data(request, device):
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
+        # Use device_name in the query
         query = BatteryData.objects.filter(
-            site_name=device,
+            site_name=device_name,
             reported_time_utc__range=(start_date, end_date)
         )
         
@@ -310,32 +408,54 @@ def get_battery_data(request, device):
         if max_value:
             query = query.filter(corrected_battery_voltage__lte=float(max_value))
         
+        # Time the database query
+        query_start = time.time()
         data = query.values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')
+        query_time = time.time() - query_start
         
         formatted_data = [
             {
                 'timestamp': item['reported_time_utc'],
                 'value': float(item['corrected_battery_voltage']) if item['corrected_battery_voltage'] is not None else None,
-                'site_name': item['site_name']
+                'site_name': item['site_name'],
+                'device_id': device_id  # Include the device ID in the response
             }
             for item in data
         ]
         
+        # Log performance
+        total_time = time.time() - start_time
+        logger.info(
+            f"Battery query - Device: {device_name}, "
+            f"Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
+            f"Records: {len(data)}"
+        )
+        
         if format_type == 'csv':
-            logger.info(f"Processing CSV export for {device}")
-            return export_data(request, formatted_data, f"battery_{device}")
+            logger.info(f"Processing CSV export for {device_name}")
+            return export_data(
+                request, 
+                formatted_data, 
+                f"battery_{device_name}",
+                'battery',
+                device_id
+            )
         
         serializer = BatteryDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
+        
     except Exception as e:
         logger.error(f"Error in get_battery_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+    
 @api_view(['GET'])
 @permission_classes([CanExportData])
 def get_weather_data(request):
     try:
         logger.info(f"Weather data request")
+        
+        # Start timing the request
+        start_time = time.time()
         
         days = request.GET.get('days')
         start_date_str = request.GET.get('start_date')
@@ -363,9 +483,7 @@ def get_weather_data(request):
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        query = WeatherData.objects.filter(
-            data_time_utc__range=(start_date, end_date)
-        )
+        query = WeatherData.objects.filter(data_time_utc__range=(start_date, end_date))
         
         if min_temp:
             query = query.filter(temperature__gte=float(min_temp))
@@ -376,10 +494,11 @@ def get_weather_data(request):
         if max_humidity:
             query = query.filter(humidity__lte=float(max_humidity))
         
-        data = query.values(
-            'data_time_utc', 'temperature', 'humidity', 
-            'windspeed', 'winddirection', 'pressure', 'solar_radiation'
-        ).order_by('data_time_utc')
+        # Time the database query
+        query_start = time.time()
+        data = query.values('data_time_utc', 'temperature', 'humidity', 'windspeed', 
+                           'winddirection', 'pressure', 'solar_radiation').order_by('data_time_utc')
+        query_time = time.time() - query_start
         
         formatted_data = [
             {
@@ -389,14 +508,26 @@ def get_weather_data(request):
                 'windspeed': float(item['windspeed']) if item['windspeed'] is not None else None,
                 'winddirection': float(item['winddirection']) if item['winddirection'] is not None else None,
                 'pressure': float(item['pressure']) if item['pressure'] is not None else None,
-                'solar_radiation': float(item['solar_radiation']) if item['solar_radiation'] is not None else None,
+                'solar_radiation': float(item['solar_radiation']) if item['solar_radiation'] is not None else None
             }
             for item in data
         ]
         
+        # Log performance
+        total_time = time.time() - start_time
+        logger.info(
+            f"Weather query - Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
+            f"Records: {len(data)}"
+        )
+        
         if format_type == 'csv':
-            logger.info(f"Processing CSV export for weather data")
-            return export_data(request, formatted_data, "weather_data")
+            logger.info("Processing CSV export for weather data")
+            return export_data(
+                request, 
+                formatted_data, 
+                "weather_data",
+                'weather'
+            )
         
         serializer = WeatherDataResponseSerializer(formatted_data, many=True)
         return Response(serializer.data)
@@ -408,44 +539,48 @@ def get_weather_data(request):
 @permission_classes([AllowAny])
 def get_pollutant_stats(request, device):
     try:
-        logger.info(f"Pollutant stats request - Device: {device}")
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT 
-                    MIN("VOC") as min_voc,
-                    MAX("VOC") as max_voc,
-                    AVG("VOC") as avg_voc,
-                    MIN("O3") as min_o3,
-                    MAX("O3") as max_o3,
-                    AVG("O3") as avg_o3,
-                    MIN("SO2") as min_so2,
-                    MAX("SO2") as max_so2,
-                    AVG("SO2") as avg_so2,
-                    MIN("NO2") as min_no2,
-                    MAX("NO2") as max_no2,
-                    AVG("NO2") as avg_no2
-                FROM "AirQualityData-VOC-V6_1" 
-                WHERE "SiteName" = %s
-            """, [device])
-            
-            row = cursor.fetchone()
-            stats = {
-                'VOC': {'min': float(row[0]) if row[0] is not None else None, 
-                        'max': float(row[1]) if row[1] is not None else None, 
-                        'avg': float(row[2]) if row[2] is not None else None},
-                'O3': {'min': float(row[3]) if row[3] is not None else None, 
-                       'max': float(row[4]) if row[4] is not None else None, 
-                       'avg': float(row[5]) if row[5] is not None else None},
-                'SO2': {'min': float(row[6]) if row[6] is not None else None, 
-                        'max': float(row[7]) if row[7] is not None else None, 
-                        'avg': float(row[8]) if row[8] is not None else None},
-                'NO2': {'min': float(row[9]) if row[9] is not None else None, 
-                        'max': float(row[10]) if row[10] is not None else None, 
-                        'avg': float(row[11]) if row[11] is not None else None},
+        # Get statistics for a specific device
+        stats = AirQualityData.objects.filter(site_name=device).aggregate(
+            avg_voc=models.Avg('voc'),
+            max_voc=models.Max('voc'),
+            min_voc=models.Min('voc'),
+            avg_o3=models.Avg('o3'),
+            max_o3=models.Max('o3'),
+            min_o3=models.Min('o3'),
+            avg_so2=models.Avg('so2'),
+            max_so2=models.Max('so2'),
+            min_so2=models.Min('so2'),
+            avg_no2=models.Avg('no2'),
+            max_no2=models.Max('no2'),
+            min_no2=models.Min('no2')
+        )
+        
+        # Format the response
+        formatted_stats = {
+            'device': device,
+            'VOC': {
+                'average': float(stats['avg_voc']) if stats['avg_voc'] else None,
+                'max': float(stats['max_voc']) if stats['max_voc'] else None,
+                'min': float(stats['min_voc']) if stats['min_voc'] else None
+            },
+            'O3': {
+                'average': float(stats['avg_o3']) if stats['avg_o3'] else None,
+                'max': float(stats['max_o3']) if stats['max_o3'] else None,
+                'min': float(stats['min_o3']) if stats['min_o3'] else None
+            },
+            'SO2': {
+                'average': float(stats['avg_so2']) if stats['avg_so2'] else None,
+                'max': float(stats['max_so2']) if stats['max_so2'] else None,
+                'min': float(stats['min_so2']) if stats['min_so2'] else None
+            },
+            'NO2': {
+                'average': float(stats['avg_no2']) if stats['avg_no2'] else None,
+                'max': float(stats['max_no2']) if stats['max_no2'] else None,
+                'min': float(stats['min_no2']) if stats['min_no2'] else None
             }
-            
-            logger.info(f"Pollutant stats retrieved for {device}")
-            return Response(stats)
+        }
+        
+        return Response(formatted_stats)
     except Exception as e:
         logger.error(f"Error in get_pollutant_stats: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -454,131 +589,64 @@ def get_pollutant_stats(request, device):
 @permission_classes([AllowAny])
 def get_battery_stats(request, device):
     try:
-        logger.info(f"Battery stats request - Device: {device}")
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT 
-                    MIN("corrected_battery_voltage") as min_voltage,
-                    MAX("corrected_battery_voltage") as max_voltage,
-                    AVG("corrected_battery_voltage") as avg_voltage
-                FROM "AirQualityData-battery-V6_1" 
-                WHERE "SiteName" = %s
-            """, [device])
-            
-            row = cursor.fetchone()
-            stats = {
-                'min': float(row[0]) if row[0] is not None else None,
-                'max': float(row[1]) if row[1] is not None else None,
-                'avg': float(row[2]) if row[2] is not None else None,
+        # Get statistics for a specific battery device
+        stats = BatteryData.objects.filter(site_name=device).aggregate(
+            avg_voltage=models.Avg('corrected_battery_voltage'),
+            max_voltage=models.Max('corrected_battery_voltage'),
+            min_voltage=models.Min('corrected_battery_voltage')
+        )
+        
+        # Format the response
+        formatted_stats = {
+            'device': device,
+            'voltage': {
+                'average': float(stats['avg_voltage']) if stats['avg_voltage'] else None,
+                'max': float(stats['max_voltage']) if stats['max_voltage'] else None,
+                'min': float(stats['min_voltage']) if stats['min_voltage'] else None
             }
-            
-            logger.info(f"Battery stats retrieved for {device}")
-            return Response(stats)
+        }
+        
+        return Response(formatted_stats)
     except Exception as e:
         logger.error(f"Error in get_battery_stats: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def get_device_groups(request):
     try:
-        logger.info(f"Device groups request")
         groups = DeviceGroup.objects.all()
-        device_groups = {}
+        result = []
         
         for group in groups:
-            device_names = list(DeviceGroupMember.objects.filter(
-                group=group
-            ).values_list('device_name', flat=True))
-            
-            device_groups[group.name] = device_names
+            devices = group.members.values_list('device_name', flat=True)
+            result.append({
+                'id': group.id,
+                'name': group.name,
+                'description': group.description,
+                'device_count': len(devices),
+                'devices': list(devices),
+                'created_at': group.created_at,
+                'updated_at': group.updated_at
+            })
         
-        logger.info(f"Device groups retrieved: {len(groups)} groups")
-        return Response(device_groups)
+        return Response(result)
     except Exception as e:
         logger.error(f"Error in get_device_groups: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsAdminUser])
-def create_device_group(request):
-    try:
-        logger.info(f"Create device group request")
-        name = request.data.get('name')
-        description = request.data.get('description', '')
-        devices = request.data.get('devices', [])
-        
-        if not name:
-            return Response({'error': 'Group name is required'}, status=status.HTTP_400_BRED_REQUEST)
-        
-        group, created = DeviceGroup.objects.get_or_create(
-            name=name,
-            defaults={'description': description}
-        )
-        
-        if not created:
-            return Response({'error': 'Group already exists'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        for device in devices:
-            DeviceGroupMember.objects.get_or_create(
-                group=group,
-                device_name=device
-            )
-        
-        logger.info(f"Device group created: {name}")
-        return Response({'message': f'Device group {name} created successfully'}, status=status.HTTP_201_CREATED)
-    
-    except Exception as e:
-        logger.error(f"Error in create_device_group: {str(e)}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsAdminUser])
-def add_device_to_group(request, group_id):
-    try:
-        logger.info(f"Add device to group request - Group ID: {group_id}")
-        device_name = request.data.get('device_name')
-        
-        if not device_name:
-            return Response({'error': 'Device name is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            group = DeviceGroup.objects.get(id=group_id)
-        except DeviceGroup.DoesNotExist:
-            return Response({'error': 'Device group not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-        member, created = DeviceGroupMember.objects.get_or_create(
-            group=group,
-            device_name=device_name
-        )
-        
-        if created:
-            logger.info(f"Device {device_name} added to group {group.name}")
-            return Response({'message': f'Device {device_name} added to group {group.name}'}, status=status.HTTP_201_CREATED)
-        else:
-            logger.info(f"Device {device_name} already in group {group.name}")
-            return Response({'message': f'Device {device_name} already in group {group.name}'}, status=status.HTTP_200_OK)
-    
-    except Exception as e:
-        logger.error(f"Error in add_device_to_group: {str(e)}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 @api_view(['GET'])
-@permission_classes([CanExportData])
+@permission_classes([AllowAny])
 def get_multi_device_data(request):
     try:
-        logger.info(f"Multi-device data request")
-        
-        devices = request.GET.get('devices', '').split(',')
+        devices = request.GET.getlist('devices')
         pollutant = request.GET.get('pollutant', 'VOC')
-        days = request.GET.get('days', 30)
-        format_type = request.GET.get('format', 'json')
+        days = request.GET.get('days', 7)
         
-        if not devices or not devices[0]:
+        if not devices:
             return Response({'error': 'No devices specified'}, status=status.HTTP_400_BAD_REQUEST)
         
-        latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
-        end_date = latest_date
+        end_date = get_latest_date(AirQualityData, 'reported_time_utc')
         start_date = end_date - timedelta(days=int(days))
         
         field_mapping = {
@@ -589,59 +657,101 @@ def get_multi_device_data(request):
         }
         
         if pollutant not in field_mapping:
-            logger.warning(f"Invalid pollutant requested: {pollutant}")
             return Response({'error': 'Invalid pollutant'}, status=status.HTTP_400_BAD_REQUEST)
         
         field_name = field_mapping[pollutant]
         
-        all_data = []
+        data = AirQualityData.objects.filter(
+            site_name__in=devices,
+            reported_time_utc__range=(start_date, end_date)
+        ).values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
+        
+        # Group data by device
+        result = {}
         for device in devices:
-            data = AirQualityData.objects.filter(
-                site_name=device.strip(),
-                reported_time_utc__range=(start_date, end_date)
-            ).values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
-            
-            formatted_data = [
-                {
-                    'timestamp': item['reported_time_utc'],
-                    'value': float(item[field_name]) if item[field_name] is not None else None,
-                    'site_name': item['site_name'],
-                    'pollutant': pollutant
-                }
-                for item in data
-            ]
-            
-            all_data.extend(formatted_data)
+            result[device] = []
         
-        if format_type == 'csv':
-            logger.info(f"Processing CSV export for multi-device data")
-            return export_data(request, all_data, f"multi_device_{pollutant}")
+        for item in data:
+            device_name = item['site_name']
+            result[device_name].append({
+                'timestamp': item['reported_time_utc'],
+                'value': float(item[field_name]) if item[field_name] is not None else None
+            })
         
-        return Response(all_data)
+        return Response(result)
     except Exception as e:
         logger.error(f"Error in get_multi_device_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_latest_dates(request):
     try:
-        logger.info(f"Latest dates request")
-        latest_dates = {
-            "air_quality": get_latest_date(AirQualityData, 'reported_time_utc'),
-            "battery": get_latest_date(BatteryData, 'reported_time_utc'),
-            "weather": get_latest_date(WeatherData, 'data_time_utc')
-        }
+        latest_air_quality = get_latest_date(AirQualityData, 'reported_time_utc')
+        latest_battery = get_latest_date(BatteryData, 'reported_time_utc')
+        latest_weather = get_latest_date(WeatherData, 'data_time_utc')
         
-        formatted_dates = {}
-        for key, value in latest_dates.items():
-            if isinstance(value, datetime):
-                formatted_dates[key] = value.isoformat()
-            else:
-                formatted_dates[key] = value
-        
-        logger.info(f"Latest dates retrieved")
-        return Response(formatted_dates)
+        return Response({
+            'air_quality': latest_air_quality,
+            'battery': latest_battery,
+            'weather': latest_weather
+        })
     except Exception as e:
         logger.error(f"Error in get_latest_dates: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdminUser])
+def create_device_group(request):
+    try:
+        name = request.data.get('name')
+        description = request.data.get('description', '')
+        
+        if not name:
+            return Response({'error': 'Group name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        group = DeviceGroup.objects.create(
+            name=name,
+            description=description
+        )
+        
+        return Response({
+            'id': group.id,
+            'name': group.name,
+            'description': group.description,
+            'message': 'Device group created successfully'
+        }, status=status.HTTP_201_CREATED)
+    except IntegrityError:
+        return Response({'error': 'Device group with this name already exists'}, 
+                       status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error in create_device_group: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdminUser])
+def add_device_to_group(request, group_id):
+    try:
+        device_name = request.data.get('device_name')
+        
+        if not device_name:
+            return Response({'error': 'Device name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        group = DeviceGroup.objects.get(id=group_id)
+        
+        # Check if device already exists in the group
+        if DeviceGroupMember.objects.filter(group=group, device_name=device_name).exists():
+            return Response({'error': 'Device already exists in this group'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        DeviceGroupMember.objects.create(
+            group=group,
+            device_name=device_name
+        )
+        
+        return Response({'message': 'Device added to group successfully'})
+    except DeviceGroup.DoesNotExist:
+        return Response({'error': 'Device group not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error in add_device_to_group: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

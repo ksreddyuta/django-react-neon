@@ -1,379 +1,609 @@
-# test_all_parameters.ps1
-Write-Host "Comprehensive API Parameter Testing..." -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
+# comprehensive_api_test_with_csv.ps1
+# Complete API testing script with CSV export functionality
 
-# Base configuration
-$apiBaseUrl = "http://localhost:8000/api"
-$testEmail = "testuser_$(Get-Date -Format 'HHmmss')@example.com"
-$testPassword = "TestPassword123!"
-$registerBody = @{email=$testEmail; password=$testPassword} | ConvertTo-Json
-$loginBody = $registerBody  # Same structure
+# Function to display colored output
+function Write-ColorOutput($ForegroundColor) {
+    $fc = $Host.UI.RawUI.ForegroundColor
+    $Host.UI.RawUI.ForegroundColor = $ForegroundColor
+    if ($args) {
+        Write-Output $args
+    }
+    $Host.UI.RawUI.ForegroundColor = $fc
+}
 
-# Helper function for API requests
-function Invoke-ApiRequest {
+# Function to make API requests and handle responses
+function Invoke-ApiTest {
     param(
+        [string]$Name,
+        [string]$Method,
         [string]$Url,
-        [string]$Method = "GET",
-        [string]$Body = $null,
-        [string]$Token = $null
+        [object]$Body = $null,
+        [string]$Token = $null,
+        [int]$ExpectedStatus,
+        [bool]$ParseJson = $true,
+        [bool]$IsFileDownload = $false
     )
     
-    $headers = @{"Content-Type" = "application/json"}
+    Write-ColorOutput Yellow "Testing: $Name"
+    Write-ColorOutput Cyan "Endpoint: $Method $Url"
+    
+    $headers = @{
+        "Content-Type" = "application/json"
+    }
+    
     if ($Token) {
         $headers["Authorization"] = "Bearer $Token"
     }
     
     try {
-        $params = @{
-            Uri = $Url
-            Method = $Method
-            Headers = $headers
+        if ($Method -eq "GET") {
+            if ($IsFileDownload) {
+                $response = Invoke-WebRequest -Uri $Url -Method $Method -Headers $headers -OutFile "download.tmp"
+                # Read the downloaded file content
+                $content = Get-Content "download.tmp" -Raw
+                Remove-Item "download.tmp" -Force
+                
+                return @{
+                    StatusCode = 200
+                    Content = $content
+                    RawContent = $content
+                    Success = $true
+                    IsFile = $true
+                }
+            } else {
+                $response = Invoke-WebRequest -Uri $Url -Method $Method -Headers $headers
+            }
+        }
+        else {
+            $jsonBody = if ($Body) { $Body | ConvertTo-Json } else { $null }
+            $response = Invoke-WebRequest -Uri $Url -Method $Method -Headers $headers -Body $jsonBody
         }
         
-        if ($Body) {
-            $params["Body"] = $Body
-        }
+        Write-ColorOutput Green "✓ Success: Status $($response.StatusCode)"
         
-        $response = Invoke-RestMethod @params
-        return @{
-            Success = $true
-            Response = $response
+        if ($ParseJson -and $response.Content -and -not $IsFileDownload) {
+            try {
+                $parsedContent = $response.Content | ConvertFrom-Json
+                return @{
+                    StatusCode = $response.StatusCode
+                    Content = $parsedContent
+                    RawContent = $response.Content
+                    Success = $true
+                }
+            }
+            catch {
+                return @{
+                    StatusCode = $response.StatusCode
+                    Content = $response.Content
+                    RawContent = $response.Content
+                    Success = $true
+                }
+            }
         }
-    } catch {
+        else {
+            return @{
+                StatusCode = $response.StatusCode
+                Content = $response.Content
+                RawContent = $response.Content
+                Success = $true
+            }
+        }
+    }
+    catch {
         $statusCode = $_.Exception.Response.StatusCode.value__
-        $statusDescription = $_.Exception.Response.StatusDescription
-        $errorDetails = $_.ErrorDetails.Message
+        $errorMsg = $_.Exception.Message
         
+        if ($statusCode -eq $ExpectedStatus) {
+            Write-ColorOutput Green "✓ Expected error: Status $statusCode"
+            return @{
+                StatusCode = $statusCode
+                Error = $errorMsg
+                Success = $false
+            }
+        }
+        else {
+            Write-ColorOutput Red "✗ Failed: Expected $ExpectedStatus, got $statusCode"
+            Write-ColorOutput Red "Error: $errorMsg"
+            return @{
+                StatusCode = $statusCode
+                Error = $errorMsg
+                Success = $false
+            }
+        }
+    }
+}
+
+# Function to wait for server to be ready
+function Wait-ForServer {
+    param([string]$Url, [int]$MaxRetries = 30)
+    
+    $retryCount = 0
+    $serverReady = $false
+    
+    Write-ColorOutput Yellow "Waiting for server to be ready..."
+    
+    while ($retryCount -lt $MaxRetries -and -not $serverReady) {
         try {
-            $errorJson = $errorDetails | ConvertFrom-Json
-            $errorMessage = $errorJson.error
-        } catch {
-            $errorMessage = $errorDetails
+            $response = Invoke-WebRequest -Uri $Url -Method GET -TimeoutSec 5
+            if ($response.StatusCode -eq 200) {
+                $serverReady = $true
+                Write-ColorOutput Green "Server is ready!"
+            }
+        }
+        catch {
+            Write-ColorOutput Yellow "Server not ready yet, retrying in 2 seconds... ($retryCount/$MaxRetries)"
+            $retryCount++
+            Start-Sleep -Seconds 2
+        }
+    }
+    
+    if (-not $serverReady) {
+        Write-ColorOutput Red "Server did not become ready within the expected time"
+        exit 1
+    }
+}
+
+# Function to export test results to JSON
+function Export-TestResults {
+    param($Results)
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $filename = "api_test_results_$timestamp.json"
+    
+    $Results | ConvertTo-Json -Depth 10 | Out-File -FilePath $filename -Encoding UTF8
+    Write-ColorOutput Green "Test results exported to: $filename"
+    return $filename
+}
+
+# Function to test CSV export functionality
+function Test-CsvExport {
+    param(
+        [string]$Name,
+        [string]$Url,
+        [string]$Token,
+        [string]$ExpectedContentType = "text/csv"
+    )
+    
+    Write-ColorOutput Yellow "Testing CSV Export: $Name"
+    Write-ColorOutput Cyan "Endpoint: GET $Url"
+    
+    try {
+        $headers = @{
+            "Authorization" = "Bearer $Token"
         }
         
+        $response = Invoke-WebRequest -Uri $Url -Method GET -Headers $headers -OutFile "test_export.csv"
+        
+        # Check if file was downloaded
+        if (Test-Path "test_export.csv") {
+            $fileContent = Get-Content "test_export.csv" -Raw
+            $fileSize = (Get-Item "test_export.csv").Length
+            
+            Write-ColorOutput Green "✓ CSV Export Success: Downloaded $fileSize bytes"
+            Write-ColorOutput Gray "First 200 chars: $($fileContent.Substring(0, [Math]::Min(200, $fileContent.Length)))..."
+            
+            # Clean up
+            Remove-Item "test_export.csv" -Force
+            
+            return @{
+                Success = $true
+                FileSize = $fileSize
+                SampleContent = $fileContent.Substring(0, [Math]::Min(200, $fileContent.Length))
+            }
+        } else {
+            Write-ColorOutput Red "✗ CSV Export Failed: No file downloaded"
+            return @{
+                Success = $false
+                Error = "No file downloaded"
+            }
+        }
+    }
+    catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        $errorMsg = $_.Exception.Message
+        Write-ColorOutput Red "✗ CSV Export Failed: Status $statusCode - $errorMsg"
         return @{
             Success = $false
+            Error = $errorMsg
             StatusCode = $statusCode
-            StatusDescription = $statusDescription
-            ErrorMessage = $errorMessage
         }
     }
 }
+
+# Main script execution
+Write-ColorOutput Green "Starting Comprehensive API Tests with CSV Export"
+Write-ColorOutput Green "=========================================="
+
+# Configuration
+$baseUrl = "http://localhost:8000/api"
+$healthUrl = "$baseUrl/health/"
+
+# Initialize results object
+$testResults = @{
+    timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    tests = @()
+}
+
+# Wait for server to be ready
+Wait-ForServer -Url $healthUrl
 
 # Test 1: Health Check
-Write-Host "TEST 1: Health Check" -ForegroundColor Yellow
-$healthResult = Invoke-ApiRequest -Url "$apiBaseUrl/health/" -Method GET
-
-if ($healthResult.Success) {
-    Write-Host "SUCCESS: Health check passed" -ForegroundColor Green
-} else {
-    Write-Host "ERROR: $($healthResult.StatusCode) - $($healthResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($healthResult.ErrorMessage)" -ForegroundColor Red
-    exit
+Write-ColorOutput Green "1. Testing Health Check"
+$healthResponse = Invoke-ApiTest -Name "Health Check" -Method "GET" -Url $healthUrl -ExpectedStatus 200
+$testResults.tests += @{
+    name = "Health Check"
+    endpoint = "GET /api/health/"
+    response = $healthResponse
 }
 
-Write-Host "`n"
-
-# Test 2: New User Registration
-Write-Host "TEST 2: New User Registration" -ForegroundColor Yellow
-$registerResult = Invoke-ApiRequest -Url "$apiBaseUrl/register/" -Method POST -Body $registerBody
-
-if ($registerResult.Success) {
-    Write-Host "SUCCESS: User registered" -ForegroundColor Green
-} else {
-    Write-Host "ERROR: $($registerResult.StatusCode) - $($registerResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($registerResult.ErrorMessage)" -ForegroundColor Red
-    exit
+# Test 2: User Registration
+Write-ColorOutput Green "2. Testing User Registration"
+$randomEmail = "testuser_$(Get-Date -Format 'yyyyMMddHHmmss')@example.com"
+$registerData = @{
+    email = $randomEmail
+    password = "TestPass123!"
 }
 
-Write-Host "`n"
-
-# Test 3: Valid Login
-Write-Host "TEST 3: Valid Login" -ForegroundColor Yellow
-$loginResult = Invoke-ApiRequest -Url "$apiBaseUrl/login/" -Method POST -Body $loginBody
-
-if ($loginResult.Success) {
-    Write-Host "SUCCESS: Login successful" -ForegroundColor Green
-    $accessToken = $loginResult.Response.access
-} else {
-    Write-Host "ERROR: $($loginResult.StatusCode) - $($loginResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($loginResult.ErrorMessage)" -ForegroundColor Red
-    exit
+$registerResponse = Invoke-ApiTest -Name "User Registration" -Method "POST" -Url "$baseUrl/register/" -Body $registerData -ExpectedStatus 201
+$testResults.tests += @{
+    name = "User Registration"
+    endpoint = "POST /api/register/"
+    request = $registerData
+    response = $registerResponse
 }
 
-Write-Host "`n"
+# Test 3: User Login
+Write-ColorOutput Green "3. Testing User Login"
+$loginData = @{
+    email = "admin@example.com"
+    password = "Admin@1234"
+}
 
-# Test 4: Get Devices
-Write-Host "TEST 4: Get Devices" -ForegroundColor Yellow
-$devicesResult = Invoke-ApiRequest -Url "$apiBaseUrl/devices/" -Method GET -Token $accessToken
+$loginResponse = Invoke-ApiTest -Name "User Login" -Method "POST" -Url "$baseUrl/login/" -Body $loginData -ExpectedStatus 200
+$testResults.tests += @{
+    name = "User Login"
+    endpoint = "POST /api/login/"
+    request = $loginData
+    response = $loginResponse
+}
 
-if ($devicesResult.Success) {
-    Write-Host "SUCCESS: Retrieved devices" -ForegroundColor Green
-    $devices = $devicesResult.Response
+# Extract tokens from login response if successful
+if ($loginResponse.Success -and $loginResponse.StatusCode -eq 200) {
+    $accessToken = $loginResponse.Content.access
+    $refreshToken = $loginResponse.Content.refresh
     
-    # Ensure devices is treated as an array
-    if ($devices -is [string]) {
-        $devices = $devices -split ', '
+    Write-ColorOutput Green "Access token obtained: $($accessToken.Substring(0, 20))..."
+    Write-ColorOutput Green "Refresh token obtained: $($refreshToken.Substring(0, 20))..."
+}
+else {
+    Write-ColorOutput Red "Login failed, skipping token-dependent tests"
+    $accessToken = $null
+    $refreshToken = $null
+}
+
+# Test 4: Protected Endpoint
+if ($accessToken) {
+    Write-ColorOutput Green "4. Testing Protected Endpoint"
+    $protectedResponse = Invoke-ApiTest -Name "Protected Endpoint" -Method "GET" -Url "$baseUrl/protected/" -Token $accessToken -ExpectedStatus 200
+    $testResults.tests += @{
+        name = "Protected Endpoint"
+        endpoint = "GET /api/protected/"
+        response = $protectedResponse
     }
-    
-    Write-Host "Found $($devices.Count) devices: $($devices -join ', ')" -ForegroundColor Cyan
-    
-    # Find VOC and battery devices
-    $vocDevices = @($devices | Where-Object { $_ -like "*VOC*" })
-    $batteryDevices = @($devices | Where-Object { $_ -like "*battery*" })
-    
-    # Store devices for subsequent tests
-    if ($vocDevices.Count -gt 0) {
-        $vocDevice = $vocDevices[0]
-        Write-Host "Using VOC device: $vocDevice for air quality tests" -ForegroundColor Cyan
-    }
-    
-    if ($batteryDevices.Count -gt 0) {
-        $batteryDevice = $batteryDevices[0]
-        Write-Host "Using battery device: $batteryDevice for battery tests" -ForegroundColor Cyan
-    }
-} else {
-    Write-Host "ERROR: $($devicesResult.StatusCode) - $($devicesResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($devicesResult.ErrorMessage)" -ForegroundColor Red
-    exit
 }
 
-Write-Host "`n"
-
-# Test 5: Get Pollutants
-Write-Host "TEST 5: Get Pollutants" -ForegroundColor Yellow
-$pollutantsResult = Invoke-ApiRequest -Url "$apiBaseUrl/pollutants/" -Method GET -Token $accessToken
-
-if ($pollutantsResult.Success) {
-    Write-Host "SUCCESS: Retrieved pollutants" -ForegroundColor Green
-    $pollutants = $pollutantsResult.Response
-    Write-Host "Found $($pollutants.Count) pollutants:" -ForegroundColor Cyan
-    
-    foreach ($pollutant in $pollutants) {
-        Write-Host "  - $($pollutant.id): $($pollutant.name) ($($pollutant.unit))" -ForegroundColor Cyan
+# Test 5: Token Refresh
+if ($refreshToken) {
+    Write-ColorOutput Green "5. Testing Token Refresh"
+    $refreshData = @{
+        refresh = $refreshToken
     }
-} else {
-    Write-Host "ERROR: $($pollutantsResult.StatusCode) - $($pollutantsResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($pollutantsResult.ErrorMessage)" -ForegroundColor Red
-    exit
+
+    $refreshResponse = Invoke-ApiTest -Name "Token Refresh" -Method "POST" -Url "$baseUrl/token/refresh/" -Body $refreshData -ExpectedStatus 200
+    $testResults.tests += @{
+        name = "Token Refresh"
+        endpoint = "POST /api/token/refresh/"
+        request = $refreshData
+        response = $refreshResponse
+    }
 }
 
-Write-Host "`n"
+# Test 6: Get Devices
+Write-ColorOutput Green "6. Testing Get Devices"
+$devicesResponse = Invoke-ApiTest -Name "Get Devices" -Method "GET" -Url "$baseUrl/devices/" -ExpectedStatus 200
+$testResults.tests += @{
+    name = "Get Devices"
+    endpoint = "GET /api/devices/"
+    response = $devicesResponse
+}
 
-# Test 6: Test All Air Quality Pollutants
-Write-Host "TEST 6: Testing All Air Quality Pollutants" -ForegroundColor Yellow
-if ($vocDevice -and $pollutants) {
-    foreach ($pollutant in $pollutants) {
-        $pollutantId = $pollutant.id
-        Write-Host "Testing pollutant: $pollutantId" -ForegroundColor Cyan
+# Test 7: Get Pollutants
+Write-ColorOutput Green "7. Testing Get Pollutants"
+$pollutantsResponse = Invoke-ApiTest -Name "Get Pollutants" -Method "GET" -Url "$baseUrl/pollutants/" -ExpectedStatus 200
+$testResults.tests += @{
+    name = "Get Pollutants"
+    endpoint = "GET /api/pollutants/"
+    response = $pollutantsResponse
+}
+
+# Test 8: Get Air Quality Data for Multiple Devices and Pollutants
+if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+    # Get air quality devices (limit to 5-6 as requested)
+    $aqDevices = $devicesResponse.Content | Where-Object { $_.type -eq "air_quality" } | Select-Object -First 6
+    
+    Write-ColorOutput Green "8. Testing Air Quality Data for $($aqDevices.Count) devices"
+    
+    $airQualityTests = @()
+    
+    foreach ($device in $aqDevices) {
+        Write-ColorOutput Yellow "Testing device: $($device.name)"
         
-        $airQualityResult = Invoke-ApiRequest -Url "$apiBaseUrl/air-quality/$vocDevice/$pollutantId/?days=7" -Method GET -Token $accessToken
-
-        if ($airQualityResult.Success) {
-            $airQualityData = $airQualityResult.Response
-            Write-Host "  SUCCESS: Found $($airQualityData.Count) $pollutantId records" -ForegroundColor Green
+        # Test all pollutants for this device
+        foreach ($pollutant in @("VOC", "O3", "SO2", "NO2")) {
+            $airQualityUrl = "$baseUrl/air-quality/$($device.id)/$pollutant/?days=1"
+            $airQualityResponse = Invoke-ApiTest -Name "Air Quality $($device.name) - $pollutant" -Method "GET" -Url $airQualityUrl -ExpectedStatus 200
             
-            if ($airQualityData.Count -gt 0) {
-                $firstRecord = $airQualityData[0]
-                Write-Host "  First record value: $($firstRecord.value) $($pollutant.unit)" -ForegroundColor Cyan
+            $airQualityTests += @{
+                device = $device.name
+                device_id = $device.id
+                pollutant = $pollutant
+                response = $airQualityResponse
             }
-        } else {
-            Write-Host "  ERROR: $($airQualityResult.StatusCode) - $($airQualityResult.StatusDescription)" -ForegroundColor Red
-            Write-Host "  Details: $($airQualityResult.ErrorMessage)" -ForegroundColor Red
-        }
-        Write-Host "`n"
-    }
-} else {
-    Write-Host "SKIPPED: No VOC device or pollutants available" -ForegroundColor Yellow
-}
-
-Write-Host "`n"
-
-# Test 7: Test Battery Data
-Write-Host "TEST 7: Testing Battery Data" -ForegroundColor Yellow
-if ($batteryDevice) {
-    $batteryResult = Invoke-ApiRequest -Url "$apiBaseUrl/battery/$batteryDevice/?days=7" -Method GET -Token $accessToken
-
-    if ($batteryResult.Success) {
-        $batteryData = $batteryResult.Response
-        Write-Host "SUCCESS: Found $($batteryData.Count) battery records" -ForegroundColor Green
-        
-        if ($batteryData.Count -gt 0) {
-            $firstRecord = $batteryData[0]
-            Write-Host "First record value: $($firstRecord.value) V" -ForegroundColor Cyan
             
-            # Check for min/max values
-            $minValue = ($batteryData | Measure-Object -Property value -Minimum).Minimum
-            $maxValue = ($batteryData | Measure-Object -Property value -Maximum).Maximum
-            $avgValue = ($batteryData | Measure-Object -Property value -Average).Average
-            
-            Write-Host "Battery stats - Min: $minValue V, Max: $maxValue V, Avg: $([math]::Round($avgValue, 2)) V" -ForegroundColor Cyan
+            # Add a small delay to avoid overwhelming the server
+            Start-Sleep -Milliseconds 100
         }
-    } else {
-        Write-Host "ERROR: $($batteryResult.StatusCode) - $($batteryResult.StatusDescription)" -ForegroundColor Red
-        Write-Host "Details: $($batteryResult.ErrorMessage)" -ForegroundColor Red
     }
-} else {
-    Write-Host "SKIPPED: No battery device available" -ForegroundColor Yellow
-}
-
-Write-Host "`n"
-
-# Test 8: Test Weather Data Parameters
-Write-Host "TEST 8: Testing Weather Data Parameters" -ForegroundColor Yellow
-$weatherResult = Invoke-ApiRequest -Url "$apiBaseUrl/weather/?days=7" -Method GET -Token $accessToken
-
-if ($weatherResult.Success) {
-    $weatherData = $weatherResult.Response
-    Write-Host "SUCCESS: Found $($weatherData.Count) weather records" -ForegroundColor Green
     
-    if ($weatherData.Count -gt 0) {
-        $firstRecord = $weatherData[0]
-        Write-Host "Weather parameters in first record:" -ForegroundColor Cyan
+    $testResults.tests += @{
+        name = "Air Quality Data"
+        endpoint = "GET /api/air-quality/{device_id}/{pollutant}/"
+        responses = $airQualityTests
+    }
+}
+
+# Test 9: Get Battery Data for Multiple Devices
+if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+    # Get battery devices (limit to 5-6 as requested)
+    $batteryDevices = $devicesResponse.Content | Where-Object { $_.type -eq "battery" } | Select-Object -First 6
+    
+    Write-ColorOutput Green "9. Testing Battery Data for $($batteryDevices.Count) devices"
+    
+    $batteryTests = @()
+    
+    foreach ($device in $batteryDevices) {
+        Write-ColorOutput Yellow "Testing device: $($device.name)"
         
-        # Extract all available parameters from the first record
-        $weatherParams = $firstRecord.PSObject.Properties | Where-Object { $_.Name -ne 'timestamp' }
-        foreach ($param in $weatherParams) {
-            if ($null -ne $param.Value) {
-                Write-Host "  - $($param.Name): $($param.Value)" -ForegroundColor Cyan
+        $batteryUrl = "$baseUrl/battery/$($device.id)/?days=1"
+        $batteryResponse = Invoke-ApiTest -Name "Battery $($device.name)" -Method "GET" -Url $batteryUrl -ExpectedStatus 200
+        
+        $batteryTests += @{
+            device = $device.name
+            device_id = $device.id
+            response = $batteryResponse
+        }
+        
+        # Add a small delay to avoid overwhelming the server
+        Start-Sleep -Milliseconds 100
+    }
+    
+    $testResults.tests += @{
+        name = "Battery Data"
+        endpoint = "GET /api/battery/{device_id}/"
+        responses = $batteryTests
+    }
+}
+
+# Test 10: Get Weather Data
+Write-ColorOutput Green "10. Testing Get Weather Data"
+$weatherResponse = Invoke-ApiTest -Name "Get Weather Data" -Method "GET" -Url "$baseUrl/weather/?days=1" -ExpectedStatus 200
+$testResults.tests += @{
+    name = "Weather Data"
+    endpoint = "GET /api/weather/"
+    response = $weatherResponse
+}
+
+# Test 11: Get Pollutant Stats for Multiple Devices
+if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+    # Test stats for multiple devices (limit to 5-6 as requested)
+    $statsDevices = $devicesResponse.Content | Select-Object -First 6
+    
+    Write-ColorOutput Green "11. Testing Pollutant Stats for $($statsDevices.Count) devices"
+    
+    $statsTests = @()
+    
+    foreach ($device in $statsDevices) {
+        Write-ColorOutput Yellow "Testing stats for: $($device.name)"
+        
+        $statsUrl = "$baseUrl/stats/air-quality/$($device.name)/"
+        $statsResponse = Invoke-ApiTest -Name "Pollutant Stats $($device.name)" -Method "GET" -Url $statsUrl -ExpectedStatus 200
+        
+        $statsTests += @{
+            device = $device.name
+            response = $statsResponse
+        }
+        
+        # Add a small delay to avoid overwhelming the server
+        Start-Sleep -Milliseconds 100
+    }
+    
+    $testResults.tests += @{
+        name = "Pollutant Stats"
+        endpoint = "GET /api/stats/air-quality/{device}/"
+        responses = $statsTests
+    }
+}
+
+# Test 12: Get Battery Stats for Multiple Devices
+if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+    # Test battery stats for multiple devices (limit to 5-6 as requested)
+    $batteryStatsDevices = $devicesResponse.Content | Where-Object { $_.type -eq "battery" } | Select-Object -First 6
+    
+    Write-ColorOutput Green "12. Testing Battery Stats for $($batteryStatsDevices.Count) devices"
+    
+    $batteryStatsTests = @()
+    
+    foreach ($device in $batteryStatsDevices) {
+        Write-ColorOutput Yellow "Testing battery stats for: $($device.name)"
+        
+        $batteryStatsUrl = "$baseUrl/stats/battery/$($device.name)/"
+        $batteryStatsResponse = Invoke-ApiTest -Name "Battery Stats $($device.name)" -Method "GET" -Url $batteryStatsUrl -ExpectedStatus 200
+        
+        $batteryStatsTests += @{
+            device = $device.name
+            response = $batteryStatsResponse
+        }
+        
+        # Add a small delay to avoid overwhelming the server
+        Start-Sleep -Milliseconds 100
+    }
+    
+    $testResults.tests += @{
+        name = "Battery Stats"
+        endpoint = "GET /api/stats/battery/{device}/"
+        responses = $batteryStatsTests
+    }
+}
+
+# Test 13: Get Latest Dates
+Write-ColorOutput Green "13. Testing Get Latest Dates"
+$latestDatesResponse = Invoke-ApiTest -Name "Get Latest Dates" -Method "GET" -Url "$baseUrl/latest-dates/" -ExpectedStatus 200
+$testResults.tests += @{
+    name = "Latest Dates"
+    endpoint = "GET /api/latest-dates/"
+    response = $latestDatesResponse
+}
+
+# Test 14: Multi-Device Data
+Write-ColorOutput Green "14. Testing Multi-Device Data"
+if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 1) {
+    $deviceNames = ($devicesResponse.Content | Select-Object -First 3 | ForEach-Object { $_.name }) -join ","
+    $multiDeviceUrl = "$baseUrl/multi-device-data/?devices=$deviceNames&pollutant=VOC&days=1"
+    $multiDeviceResponse = Invoke-ApiTest -Name "Multi-Device Data" -Method "GET" -Url $multiDeviceUrl -ExpectedStatus 200
+    
+    $testResults.tests += @{
+        name = "Multi-Device Data"
+        endpoint = "GET /api/multi-device-data/"
+        request = @{ devices = $deviceNames; pollutant = "VOC"; days = 1 }
+        response = $multiDeviceResponse
+    }
+}
+
+# Test 15: CSV Export Tests (if authenticated)
+if ($accessToken) {
+    Write-ColorOutput Green "15. Testing CSV Export Functionality"
+    
+    $csvTests = @()
+    
+    # Test Air Quality CSV Export
+    if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+        $aqDevice = $devicesResponse.Content | Where-Object { $_.type -eq "air_quality" } | Select-Object -First 1
+        
+        if ($aqDevice) {
+            $csvUrl = "$baseUrl/air-quality/$($aqDevice.id)/VOC/?days=1&format=csv"
+            $csvResponse = Test-CsvExport -Name "Air Quality CSV Export" -Url $csvUrl -Token $accessToken
+            
+            $csvTests += @{
+                type = "air_quality"
+                device = $aqDevice.name
+                response = $csvResponse
             }
         }
+    }
+    
+    # Test Battery CSV Export
+    if ($devicesResponse.Success -and $devicesResponse.Content.Length -gt 0) {
+        $batDevice = $devicesResponse.Content | Where-Object { $_.type -eq "battery" } | Select-Object -First 1
         
-        # Calculate statistics for each parameter
-        Write-Host "`nWeather parameter statistics:" -ForegroundColor Cyan
-        foreach ($param in $weatherParams) {
-            $paramName = $param.Name
-            $values = $weatherData | Where-Object { $null -ne $_.$paramName } | ForEach-Object { $_.$paramName }
+        if ($batDevice) {
+            $csvUrl = "$baseUrl/battery/$($batDevice.id)/?days=1&format=csv"
+            $csvResponse = Test-CsvExport -Name "Battery CSV Export" -Url $csvUrl -Token $accessToken
             
-            if ($values.Count -gt 0) {
-                $minValue = ($values | Measure-Object -Minimum).Minimum
-                $maxValue = ($values | Measure-Object -Maximum).Maximum
-                $avgValue = ($values | Measure-Object -Average).Average
-                
-                Write-Host "  - ${paramName}: Min=$minValue, Max=$maxValue, Avg=$([math]::Round($avgValue, 2))" -ForegroundColor Cyan
+            $csvTests += @{
+                type = "battery"
+                device = $batDevice.name
+                response = $csvResponse
             }
         }
     }
-} else {
-    Write-Host "ERROR: $($weatherResult.StatusCode) - $($weatherResult.StatusDescription)" -ForegroundColor Red
-    Write-Host "Details: $($weatherResult.ErrorMessage)" -ForegroundColor Red
-}
-
-Write-Host "`n"
-
-# Test 9: Test Pollutant Statistics
-Write-Host "TEST 9: Testing Pollutant Statistics" -ForegroundColor Yellow
-if ($vocDevice) {
-    $pollutantStatsResult = Invoke-ApiRequest -Url "$apiBaseUrl/stats/air-quality/$vocDevice/" -Method GET -Token $accessToken
-
-    if ($pollutantStatsResult.Success) {
-        $pollutantStats = $pollutantStatsResult.Response
-        Write-Host "SUCCESS: Retrieved pollutant statistics" -ForegroundColor Green
-        Write-Host "Pollutant statistics for ${vocDevice}:" -ForegroundColor Cyan
-        
-        foreach ($key in ${pollutantStats}.PSObject.Properties.Name) {
-            $value = $pollutantStats.$key
-            Write-Host "  $key : Min=$($value.min), Max=$($value.max), Avg=$($value.avg)" -ForegroundColor Cyan
-        }
-    } else {
-        Write-Host "ERROR: $($pollutantStatsResult.StatusCode) - $($pollutantStatsResult.StatusDescription)" -ForegroundColor Red
-        Write-Host "Details: $($pollutantStatsResult.ErrorMessage)" -ForegroundColor Red
-    }
-} else {
-    Write-Host "SKIPPED: No VOC device available" -ForegroundColor Yellow
-}
-
-Write-Host "`n"
-
-# Test 10: Test Battery Statistics
-Write-Host "TEST 10: Testing Battery Statistics" -ForegroundColor Yellow
-if ($batteryDevice) {
-    $batteryStatsResult = Invoke-ApiRequest -Url "$apiBaseUrl/stats/battery/$batteryDevice/" -Method GET -Token $accessToken
-
-    if ($batteryStatsResult.Success) {
-        $batteryStats = $batteryStatsResult.Response
-        Write-Host "SUCCESS: Retrieved battery statistics" -ForegroundColor Green
-        Write-Host "Battery statistics for ${batteryDevice}:" -ForegroundColor Cyan
-        Write-Host "  Min: $($batteryStats.min), Max: $($batteryStats.max), Avg: $($batteryStats.avg)" -ForegroundColor Cyan
-    } else {
-        Write-Host "ERROR: $($batteryStatsResult.StatusCode) - $($batteryStatsResult.StatusDescription)" -ForegroundColor Red
-        Write-Host "Details: $($batteryStatsResult.ErrorMessage)" -ForegroundColor Red
-    }
-} else {
-    Write-Host "SKIPPED: No battery device available" -ForegroundColor Yellow
-}
-
-Write-Host "`n"
-
-# Test 11: Data Export Test
-Write-Host "TEST 11: Testing Data Export" -ForegroundColor Yellow
-if ($vocDevice -and $pollutants.Count -gt 0) {
-    $firstPollutant = $pollutants[0].id
-    $exportResult = Invoke-ApiRequest -Url "$apiBaseUrl/air-quality/$vocDevice/$firstPollutant/?days=1" -Method GET -Token $accessToken
-
-    if ($exportResult.Success) {
-        $exportData = $exportResult.Response
-        Write-Host "SUCCESS: Retrieved $($exportData.Count) records for export" -ForegroundColor Green
-        
-        # Test if we can convert to CSV format (simulating export)
-        if ($exportData.Count -gt 0) {
-            $csvData = $exportData | ConvertTo-Csv -NoTypeInformation
-            Write-Host "Data can be exported to CSV format ($($csvData.Count) lines)" -ForegroundColor Cyan
-            
-            # Show first few lines of CSV
-            Write-Host "CSV preview:" -ForegroundColor Cyan
-            $csvData[0..2] | ForEach-Object { Write-Host "  $_" -ForegroundColor Cyan }
-        }
-    } else {
-        Write-Host "ERROR: $($exportResult.StatusCode) - $($exportResult.StatusDescription)" -ForegroundColor Red
-        Write-Host "Details: $($exportResult.ErrorMessage)" -ForegroundColor Red
-    }
-} else {
-    Write-Host "SKIPPED: No device or pollutants available for export test" -ForegroundColor Yellow
-}
-
-Write-Host "`n"
-
-# Test 12: Time Range Testing
-Write-Host "TEST 12: Testing Different Time Ranges" -ForegroundColor Yellow
-if ($vocDevice -and $pollutants.Count -gt 0) {
-    $firstPollutant = $pollutants[0].id
-    $timeRanges = @(1, 7, 30, 90)  # days
     
-    foreach ($days in $timeRanges) {
-        Write-Host "Testing $days days range..." -ForegroundColor Cyan
-        $timeRangeResult = Invoke-ApiRequest -Url "$apiBaseUrl/air-quality/$vocDevice/$firstPollutant/?days=$days" -Method GET -Token $accessToken
-
-        if ($timeRangeResult.Success) {
-            $timeRangeData = $timeRangeResult.Response
-            Write-Host "  SUCCESS: Found $($timeRangeData.Count) records for $days days" -ForegroundColor Green
-        } else {
-            Write-Host "  ERROR: $($timeRangeResult.StatusCode) - $($timeRangeResult.StatusDescription)" -ForegroundColor Red
-            Write-Host "  Details: $($timeRangeResult.ErrorMessage)" -ForegroundColor Red
-        }
+    # Test Weather CSV Export
+    $csvUrl = "$baseUrl/weather/?days=1&format=csv"
+    $csvResponse = Test-CsvExport -Name "Weather CSV Export" -Url $csvUrl -Token $accessToken
+    
+    $csvTests += @{
+        type = "weather"
+        response = $csvResponse
     }
-} else {
-    Write-Host "SKIPPED: No device or pollutants available for time range test" -ForegroundColor Yellow
-}
-
-Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "Comprehensive Testing Summary:" -ForegroundColor Green
-Write-Host "Test user: $testEmail" -ForegroundColor Cyan
-Write-Host "Access token: $($accessToken.Substring(0,20))..." -ForegroundColor Cyan
-
-if ($vocDevice) {
-    Write-Host "VOC device tested: $vocDevice" -ForegroundColor Cyan
-}
-
-if ($batteryDevice) {
-    Write-Host "Battery device tested: $batteryDevice" -ForegroundColor Cyan
-}
-
-if ($pollutants) {
-    Write-Host "Pollutants tested: $($pollutants.Count)" -ForegroundColor Cyan
-    foreach ($pollutant in $pollutants) {
-        Write-Host "  - $($pollutant.id)" -ForegroundColor Cyan
+    
+    $testResults.tests += @{
+        name = "CSV Export"
+        endpoint = "GET /api/{endpoint}/?format=csv"
+        responses = $csvTests
     }
 }
 
-Write-Host "All parameter testing completed!" -ForegroundColor Green
+# Test 16: Device Groups (if authenticated)
+if ($accessToken) {
+    Write-ColorOutput Green "16. Testing Device Groups"
+    
+    # Get device groups
+    $deviceGroupsResponse = Invoke-ApiTest -Name "Get Device Groups" -Method "GET" -Url "$baseUrl/device-groups/" -Token $accessToken -ExpectedStatus 200
+    $testResults.tests += @{
+        name = "Get Device Groups"
+        endpoint = "GET /api/device-groups/"
+        response = $deviceGroupsResponse
+    }
+    
+    # Create a device group
+    $groupData = @{
+        name = "Test Group $(Get-Date -Format 'yyyyMMddHHmmss')"
+        description = "Test group created by API test"
+    }
+
+    $createGroupResponse = Invoke-ApiTest -Name "Create Device Group" -Method "POST" -Url "$baseUrl/device-groups/create/" -Body $groupData -Token $accessToken -ExpectedStatus 201
+    $testResults.tests += @{
+        name = "Create Device Group"
+        endpoint = "POST /api/device-groups/create/"
+        request = $groupData
+        response = $createGroupResponse
+    }
+}
+
+# Export test results
+$resultsFile = Export-TestResults -Results $testResults
+
+# Summary
+Write-ColorOutput Green "=========================================="
+Write-ColorOutput Green "COMPREHENSIVE API TESTING COMPLETE!"
+Write-ColorOutput Green "Results exported to: $resultsFile"
+Write-ColorOutput Green "This file contains detailed responses for React integration."
+Write-ColorOutput Green "=========================================="
+
+# Display quick summary
+$passedTests = ($testResults.tests | Where-Object { 
+    if ($_.response -is [array]) {
+        ($_.response | Where-Object { $_.Success -eq $true }).Count -gt 0
+    } else {
+        $_.response.Success -eq $true
+    }
+}).Count
+
+$failedTests = ($testResults.tests | Where-Object { 
+    if ($_.response -is [array]) {
+        ($_.response | Where-Object { $_.Success -eq $false }).Count -gt 0
+    } else {
+        $_.response.Success -eq $false
+    }
+}).Count
+
+Write-ColorOutput Green "Tests Passed: $passedTests"
+if ($failedTests -gt 0) {
+    Write-ColorOutput Red "Tests Failed: $failedTests"
+}
+else {
+    Write-ColorOutput Green "Tests Failed: $failedTests"
+}
+
+Write-ColorOutput Green "Total Tests: $($testResults.tests.Count)"
+Write-ColorOutput Green "=========================================="

@@ -7,15 +7,13 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 dotenv.load_dotenv(BASE_DIR / '.env')
 
-
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-key')
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
-# DEBUG = 'True'
-
+#DEBUG = 'True'
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
-    'api.apps.ApiConfig',  # Must come before admin and auth
+    'api.apps.ApiConfig',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -25,7 +23,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'rest_framework_csv',  # Add CSV support
+    'rest_framework_csv',
 ]
 
 AUTH_USER_MODEL = 'api.CustomUser'
@@ -60,6 +58,7 @@ TEMPLATES = [
         },
     },
 ]
+
 WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Neon PostgreSQL Config
@@ -89,14 +88,17 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
-        'rest_framework_csv.renderers.CSVRenderer',  # Add CSV renderer
+        'rest_framework_csv.renderers.CSVRenderer',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
     ],
 }
 
@@ -113,6 +115,13 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+
+# CSRF trusted origins
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8000",
+    "http://localhost:5173",
+    "https://django-react-neon.vercel.app",
+]
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
@@ -140,3 +149,14 @@ LOGGING = {
         'level': 'INFO',
     },
 }
+
+# Add these settings for file exports
+EXPORT_ROOT = os.path.join(BASE_DIR, 'exports')
+EXPORT_URL = '/exports/'
+
+# Create the export directory if it doesn't exist
+os.makedirs(EXPORT_ROOT, exist_ok=True)
+
+# Media files configuration
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MEDIA_URL = '/media/'
