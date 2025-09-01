@@ -22,8 +22,7 @@ class CanExportData(permissions.BasePermission):
         # Check if this is an export request
         is_export_request = (
             request.method == 'GET' and 
-            ('format' in request.GET and request.GET['format'] == 'csv') or
-            ('form' in request.GET and request.GET['form'] == 't=csv')
+            request.GET.get('format') == 'csv'
         )
         
         # For export functionality, check if user is admin
@@ -32,3 +31,18 @@ class CanExportData(permissions.BasePermission):
         
         # Allow all other requests (non-export)
         return True
+
+class CanAccessData(permissions.BasePermission):
+    """
+    Allows data access to authenticated users, but export only to admins.
+    """
+    def has_permission(self, request, view):
+        # For data access, allow all authenticated users
+        if request.user and request.user.is_authenticated:
+            return True
+        
+        # Allow public access to devices and pollutants list
+        if view.__class__.__name__ in ['get_devices', 'get_pollutants', 'get_pollutant_stats', 'get_battery_stats', 'get_latest_dates']:
+            return True
+            
+        return False

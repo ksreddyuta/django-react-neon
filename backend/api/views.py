@@ -12,6 +12,12 @@ import csv
 from django.http import FileResponse, HttpResponse
 from datetime import datetime, timedelta
 import time
+import math
+from django.core.paginator import Paginator
+from django.db.models import Avg, Max, Min, Count
+from django.core.cache import cache
+from django.conf import settings
+from django.db import connection
 
 from .serializers import (
     UserRegistrationSerializer, 
@@ -22,11 +28,49 @@ from .serializers import (
     WeatherDataResponseSerializer
 )
 from .models import AirQualityData, BatteryData, ExportedFile, WeatherData, DeviceGroup, DeviceGroupMember, CustomUser
-from .permissions import IsAdminUser, IsSuperAdminUser, CanExportData
+from .permissions import CanAccessData, IsAdminUser, IsSuperAdminUser, CanExportData
 from .file_services import generate_export_filename, save_data_to_csv, create_export_record, get_export_download_url
 
 logger = logging.getLogger(__name__)
 
+# Helper functions
+def parse_date_param(date_str, default=None):
+    if not date_str:
+        return default
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+    except ValueError:
+        try:
+            return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
+        except ValueError:
+            return default
+
+def get_latest_date(model, date_field):
+    try:
+        latest_date = model.objects.aggregate(
+            max_date=models.Max(date_field)
+        )['max_date']
+        
+        if latest_date:
+            return latest_date
+        return datetime.now()
+    except Exception as e:
+        logger.error(f"Error getting latest date from {model.__name__}: {str(e)}")
+        return datetime.now()
+
+def downsample_data(data, max_points=500):
+    """
+    Downsample data to max_points while preserving trends
+    Uses Largest Triangle Three Buckets (LTTB) algorithm for better trend preservation
+    """
+    if len(data) <= max_points:
+        return data
+    
+    # Simple downsampling - take every nth point
+    sample_rate = math.ceil(len(data) / max_points)
+    return data[::sample_rate]
+
+# User management views
 class UserRegistrationView(generics.CreateAPIView):
     permission_classes = [AllowAny] 
     serializer_class = UserRegistrationSerializer
@@ -108,31 +152,7 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
             logger.error(f"Error updating user: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-def parse_date_param(date_str, default=None):
-    if not date_str:
-        return default
-    try:
-        return datetime.strptime(date_str, '%Y-%m-%d')
-    except ValueError:
-        try:
-            return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
-        except ValueError:
-            return default
-
-def get_latest_date(model, date_field):
-    try:
-        latest_date = model.objects.aggregate(
-            max_date=models.Max(date_field)
-        )['max_date']
-        
-        if latest_date:
-            return latest_date
-        return datetime.now()
-    except Exception as e:
-        logger.error(f"Error getting latest date from {model.__name__}: {str(e)}")
-        return datetime.now()
-
-# Replace the export_data function with this new version
+# Data export function
 def export_data(request, data, filename_prefix, file_type, device_id=None, pollutant=None):
     """Save data to a physical CSV file and return download information"""
     if not request.user.is_admin():
@@ -178,9 +198,10 @@ def export_data(request, data, filename_prefix, file_type, device_id=None, pollu
             {'error': f'Failed to generate CSV: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-    
+
+# API endpoints with pagination and downsampling
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanExportData])
 def download_exported_file(request, file_id):
     """Serve an exported file for download"""
     try:
@@ -252,14 +273,13 @@ def get_pollutants(request):
     return Response(pollutants)
 
 @api_view(['GET'])
-@permission_classes([CanExportData])
+@permission_classes([CanAccessData])
 def get_air_quality_data(request, device_id, pollutant):
     try:
         # Extract the actual device name from the ID
         if device_id.startswith('aq_'):
             device_name = device_id[3:]  # Remove the "aq_" prefix
         else:
-            # Handle invalid device IDs
             return Response({'error': 'Invalid device ID for air quality data'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
@@ -274,6 +294,17 @@ def get_air_quality_data(request, device_id, pollutant):
         min_value = request.GET.get('min')
         max_value = request.GET.get('max')
         format_type = request.GET.get('format', 'json')
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 1000))
+        downsample = request.GET.get('downsample', 'true').lower() == 'true'
+        
+        # Generate cache key
+        cache_key = f"air_quality_{device_name}_{pollutant}_{days}_{start_date_str}_{end_date_str}_{min_value}_{max_value}_{page}_{limit}"
+        cached_data = cache.get(cache_key)
+        
+        if cached_data and format_type != 'csv':
+            logger.info(f"Returning cached data for {cache_key}")
+            return Response(cached_data)
         
         latest_date = get_latest_date(AirQualityData, 'reported_time_utc')
         
@@ -305,11 +336,11 @@ def get_air_quality_data(request, device_id, pollutant):
         
         field_name = field_mapping[pollutant]
         
-        # Use device_name in the query
+        # Use device_name in the query with distinct to avoid duplicates
         query = AirQualityData.objects.filter(
             site_name=device_name,
             reported_time_utc__range=(start_date, end_date)
-        )
+        ).distinct()
         
         if min_value:
             query = query.filter(**{f"{field_name}__gte": float(min_value)})
@@ -318,7 +349,14 @@ def get_air_quality_data(request, device_id, pollutant):
         
         # Time the database query
         query_start = time.time()
-        data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')[offset:offset+limit]
+        
         query_time = time.time() - query_start
         
         formatted_data = [
@@ -327,17 +365,21 @@ def get_air_quality_data(request, device_id, pollutant):
                 'value': float(item[field_name]) if item[field_name] is not None else None,
                 'site_name': item['site_name'],
                 'pollutant': pollutant,
-                'device_id': device_id  # Include the device ID in the response
+                'device_id': device_id
             }
             for item in data
         ]
+        
+        # Apply downsampling if needed
+        if downsample and len(formatted_data) > 500:
+            formatted_data = downsample_data(formatted_data, 500)
         
         # Log performance
         total_time = time.time() - start_time
         logger.info(
             f"Air quality query - Device: {device_name}, Pollutant: {pollutant}, "
             f"Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
-            f"Records: {len(data)}"
+            f"Records: {len(formatted_data)}/{total_count}"
         )
         
         if format_type == 'csv':
@@ -351,14 +393,27 @@ def get_air_quality_data(request, device_id, pollutant):
                 pollutant
             )
         
-        serializer = AirQualityDataResponseSerializer(formatted_data, many=True)
-        return Response(serializer.data)
+        response_data = {
+            'data': formatted_data,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total': total_count,
+                'pages': math.ceil(total_count / limit) if limit > 0 else 1
+            }
+        }
+        
+        # Cache the response for 5 minutes
+        if format_type != 'csv' and total_count > 0:
+            cache.set(cache_key, response_data, 300)  # 5 minutes cache
+        
+        return Response(response_data)
     except Exception as e:
         logger.error(f"Error in get_air_quality_data: {str(e)}", exc_info=True)
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 @api_view(['GET'])
-@permission_classes([CanExportData])
+@permission_classes([CanAccessData]) 
 def get_battery_data(request, device_id):
     try:
         # Extract the actual device name from the ID
@@ -379,6 +434,17 @@ def get_battery_data(request, device_id):
         min_value = request.GET.get('min')
         max_value = request.GET.get('max')
         format_type = request.GET.get('format', 'json')
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 1000))
+        downsample = request.GET.get('downsample', 'true').lower() == 'true'
+        
+        # Generate cache key
+        cache_key = f"battery_{device_name}_{days}_{start_date_str}_{end_date_str}_{min_value}_{max_value}_{page}_{limit}"
+        cached_data = cache.get(cache_key)
+        
+        if cached_data and format_type != 'csv':
+            logger.info(f"Returning cached data for {cache_key}")
+            return Response(cached_data)
         
         latest_date = get_latest_date(BatteryData, 'reported_time_utc')
         
@@ -397,11 +463,11 @@ def get_battery_data(request, device_id):
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        # Use device_name in the query
+        # Use device_name in the query with distinct to avoid duplicates
         query = BatteryData.objects.filter(
             site_name=device_name,
             reported_time_utc__range=(start_date, end_date)
-        )
+        ).distinct()
         
         if min_value:
             query = query.filter(corrected_battery_voltage__gte=float(min_value))
@@ -410,7 +476,14 @@ def get_battery_data(request, device_id):
         
         # Time the database query
         query_start = time.time()
-        data = query.values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        data = query.values('reported_time_utc', 'corrected_battery_voltage', 'site_name').order_by('reported_time_utc')[offset:offset+limit]
+        
         query_time = time.time() - query_start
         
         formatted_data = [
@@ -418,17 +491,21 @@ def get_battery_data(request, device_id):
                 'timestamp': item['reported_time_utc'],
                 'value': float(item['corrected_battery_voltage']) if item['corrected_battery_voltage'] is not None else None,
                 'site_name': item['site_name'],
-                'device_id': device_id  # Include the device ID in the response
+                'device_id': device_id
             }
             for item in data
         ]
+        
+        # Apply downsampling if needed
+        if downsample and len(formatted_data) > 500:
+            formatted_data = downsample_data(formatted_data, 500)
         
         # Log performance
         total_time = time.time() - start_time
         logger.info(
             f"Battery query - Device: {device_name}, "
             f"Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
-            f"Records: {len(data)}"
+            f"Records: {len(formatted_data)}/{total_count}"
         )
         
         if format_type == 'csv':
@@ -441,15 +518,28 @@ def get_battery_data(request, device_id):
                 device_id
             )
         
-        serializer = BatteryDataResponseSerializer(formatted_data, many=True)
-        return Response(serializer.data)
+        response_data = {
+            'data': formatted_data,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total': total_count,
+                'pages': math.ceil(total_count / limit) if limit > 0 else 1
+            }
+        }
+        
+        # Cache the response for 5 minutes
+        if format_type != 'csv' and total_count > 0:
+            cache.set(cache_key, response_data, 300)  # 5 minutes cache
+        
+        return Response(response_data)
         
     except Exception as e:
         logger.error(f"Error in get_battery_data: {str(e)}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERternal_SERVER_ERROR)
     
 @api_view(['GET'])
-@permission_classes([CanExportData])
+@permission_classes([CanAccessData]) 
 def get_weather_data(request):
     try:
         logger.info(f"Weather data request")
@@ -465,6 +555,17 @@ def get_weather_data(request):
         min_humidity = request.GET.get('min_humidity')
         max_humidity = request.GET.get('max_humidity')
         format_type = request.GET.get('format', 'json')
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 1000))
+        downsample = request.GET.get('downsample', 'true').lower() == 'true'
+        
+        # Generate cache key
+        cache_key = f"weather_{days}_{start_date_str}_{end_date_str}_{min_temp}_{max_temp}_{min_humidity}_{max_humidity}_{page}_{limit}"
+        cached_data = cache.get(cache_key)
+        
+        if cached_data and format_type != 'csv':
+            logger.info(f"Returning cached data for {cache_key}")
+            return Response(cached_data)
         
         latest_date = get_latest_date(WeatherData, 'data_time_utc')
         
@@ -483,7 +584,8 @@ def get_weather_data(request):
             return Response({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS'}, 
                            status=status.HTTP_400_BAD_REQUEST)
         
-        query = WeatherData.objects.filter(data_time_utc__range=(start_date, end_date))
+        # Use distinct to avoid duplicates
+        query = WeatherData.objects.filter(data_time_utc__range=(start_date, end_date)).distinct()
         
         if min_temp:
             query = query.filter(temperature__gte=float(min_temp))
@@ -496,8 +598,15 @@ def get_weather_data(request):
         
         # Time the database query
         query_start = time.time()
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * limit
         data = query.values('data_time_utc', 'temperature', 'humidity', 'windspeed', 
-                           'winddirection', 'pressure', 'solar_radiation').order_by('data_time_utc')
+                           'winddirection', 'pressure', 'solar_radiation').order_by('data_time_utc')[offset:offset+limit]
+        
         query_time = time.time() - query_start
         
         formatted_data = [
@@ -513,11 +622,15 @@ def get_weather_data(request):
             for item in data
         ]
         
+        # Apply downsampling if needed
+        if downsample and len(formatted_data) > 500:
+            formatted_data = downsample_data(formatted_data, 500)
+        
         # Log performance
         total_time = time.time() - start_time
         logger.info(
             f"Weather query - Total time: {total_time:.3f}s, Query time: {query_time:.3f}s, "
-            f"Records: {len(data)}"
+            f"Records: {len(formatted_data)}/{total_count}"
         )
         
         if format_type == 'csv':
@@ -529,8 +642,21 @@ def get_weather_data(request):
                 'weather'
             )
         
-        serializer = WeatherDataResponseSerializer(formatted_data, many=True)
-        return Response(serializer.data)
+        response_data = {
+            'data': formatted_data,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total': total_count,
+                'pages': math.ceil(total_count / limit) if limit > 0 else 1
+            }
+        }
+        
+        # Cache the response for 5 minutes
+        if format_type != 'csv' and total_count > 0:
+            cache.set(cache_key, response_data, 300)  # 5 minutes cache
+        
+        return Response(response_data)
     except Exception as e:
         logger.error(f"Error in get_weather_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -612,7 +738,7 @@ def get_battery_stats(request, device):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsAdminUser]) 
 def get_device_groups(request):
     try:
         groups = DeviceGroup.objects.all()
@@ -636,12 +762,15 @@ def get_device_groups(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([CanAccessData]) 
 def get_multi_device_data(request):
     try:
         devices = request.GET.getlist('devices')
         pollutant = request.GET.get('pollutant', 'VOC')
         days = request.GET.get('days', 7)
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 1000))
+        downsample = request.GET.get('downsample', 'true').lower() == 'true'
         
         if not devices:
             return Response({'error': 'No devices specified'}, status=status.HTTP_400_BAD_REQUEST)
@@ -661,10 +790,17 @@ def get_multi_device_data(request):
         
         field_name = field_mapping[pollutant]
         
-        data = AirQualityData.objects.filter(
+        query = AirQualityData.objects.filter(
             site_name__in=devices,
             reported_time_utc__range=(start_date, end_date)
-        ).values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')
+        ).distinct()
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        offset = (page - 1) * limit
+        data = query.values('reported_time_utc', field_name, 'site_name').order_by('reported_time_utc')[offset:offset+limit]
         
         # Group data by device
         result = {}
@@ -678,7 +814,23 @@ def get_multi_device_data(request):
                 'value': float(item[field_name]) if item[field_name] is not None else None
             })
         
-        return Response(result)
+        # Apply downsampling if needed
+        if downsample:
+            for device in result:
+                if len(result[device]) > 500:
+                    result[device] = downsample_data(result[device], 500)
+        
+        response_data = {
+            'data': result,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total': total_count,
+                'pages': math.ceil(total_count / limit) if limit > 0 else 1
+            }
+        }
+        
+        return Response(response_data)
     except Exception as e:
         logger.error(f"Error in get_multi_device_data: {str(e)}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
