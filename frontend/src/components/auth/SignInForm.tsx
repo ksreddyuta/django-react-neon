@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Paper,
@@ -13,18 +13,36 @@ import {
   Link,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 
 export const SignInForm: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const { login, error, loading } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { login, error, loading, user } = useAuth();
+  const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Redirect when user is authenticated
+  useEffect(() => {
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
+
+  // Reset local loading state when global loading changes
+  useEffect(() => {
+    if (!loading) {
+      setIsSubmitting(false);
+    }
+  }, [loading]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login({ email, password });
+    setIsSubmitting(true);
+    console.log('Sign in attempt with:', { email });
+    await login({ email, password });
   };
 
   const handleClickShowPassword = () => {
@@ -127,15 +145,16 @@ export const SignInForm: React.FC = () => {
             fullWidth
             variant="contained"
             size="large"
-            disabled={loading}
+            disabled={isSubmitting}
             sx={{ 
               py: 1.5,
               fontWeight: 600,
               fontSize: '1.1rem',
               mb: 3,
             }}
+            disableElevation
           >
-            {loading ? 'Signing In...' : 'Sign In'}
+            {isSubmitting ? 'Signing In...' : 'Sign In'}
           </Button>
           
           <Divider sx={{ my: 3 }}>or</Divider>

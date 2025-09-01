@@ -9,6 +9,7 @@ export interface User {
   id: number;
   email: string;
   username?: string;
+  role: string; // Added role field
 }
 
 // Auth context type
@@ -54,6 +55,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setLoading(true);
       const userData = await authService.getCurrentUser();
       setUser(userData);
+      console.log('User data fetched:', userData);
     } catch (err) {
       console.error('Failed to fetch user data:', err);
       localStorage.removeItem('accessToken');
@@ -69,8 +71,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const response = await authService.login(credentials);
       
-      // Adjust based on your API response structure
-      // If your API returns tokens directly in the response
+      // Store tokens
       if (response.access) {
         localStorage.setItem('accessToken', response.access);
       }
@@ -78,16 +79,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         localStorage.setItem('refreshToken', response.refresh);
       }
       
-      // If your API returns user data in the response
+      // Set user data
       if (response.user) {
         setUser(response.user);
       } else {
-        // If not, fetch user data separately
+        // If user data is not in login response, fetch it
         await fetchUserData();
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Login failed';
       setError(errorMessage);
+      console.error('Login error:', err);
       throw err;
     } finally {
       setLoading(false);
@@ -100,7 +102,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const response = await authService.signUp(credentials);
       
-      // Adjust based on your API response structure
+      // Store tokens
       if (response.access) {
         localStorage.setItem('accessToken', response.access);
       }
@@ -108,14 +110,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         localStorage.setItem('refreshToken', response.refresh);
       }
       
+      // Set user data
       if (response.user) {
         setUser(response.user);
       } else {
+        // If user data is not in signup response, fetch it
         await fetchUserData();
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Sign up failed';
       setError(errorMessage);
+      console.error('Signup error:', err);
       throw err;
     } finally {
       setLoading(false);
@@ -125,6 +130,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const logout = () => {
     authService.logout();
     setUser(null);
+    console.log('User logged out');
   };
 
   return (

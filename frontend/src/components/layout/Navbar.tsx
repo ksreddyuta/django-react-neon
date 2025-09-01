@@ -58,6 +58,7 @@ export const Navbar: React.FC = () => {
                 component={Link} 
                 to="/dashboard"
                 size={isMobile ? 'small' : 'medium'}
+                disableElevation
               >
                 Dashboard
               </Button>
@@ -78,6 +79,7 @@ export const Navbar: React.FC = () => {
                 component={Link} 
                 to="/signin"
                 size={isMobile ? 'small' : 'medium'}
+                disableElevation
               >
                 Sign In
               </Button>
@@ -87,6 +89,7 @@ export const Navbar: React.FC = () => {
                 component={Link} 
                 to="/signup"
                 size={isMobile ? 'small' : 'medium'}
+                disableElevation
               >
                 Sign Up
               </Button>

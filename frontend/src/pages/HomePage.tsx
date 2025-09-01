@@ -1,4 +1,3 @@
-// src/pages/HomePage.tsx
 import React from 'react';
 import {
   Container,
@@ -8,8 +7,8 @@ import {
   Card,
   CardContent,
   CardActions,
+  Grid,
 } from '@mui/material';
-import Grid from '@mui/material/Grid'; // ✅ MUI v7 Grid2
 import { Link } from 'react-router-dom';
 import { useThemeContext } from '../context/ThemeContext';
 
@@ -41,7 +40,8 @@ export const HomePage: React.FC = () => {
               ? 'linear-gradient(45deg, #2563eb, #8b5cf6)'
               : 'linear-gradient(45deg, #3b82f6, #a78bfa)',
             backgroundClip: 'text',
-            color: 'transparent', // ✅ instead of textFillColor
+            WebkitBackgroundClip: 'text',
+            color: 'transparent',
           }}
         >
           Welcome to DJANGO-REACT-NEON
@@ -85,7 +85,7 @@ export const HomePage: React.FC = () => {
         Why Choose Our Platform?
       </Typography>
       <Grid container spacing={4} sx={{ mb: 10 }}>
-        <Grid  size = {{xs:12, md:4}}>
+        <Grid size = {{xs:12, md:4}}>
           <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <CardContent sx={{ flexGrow: 1 }}>
               <Typography variant="h5" component="h3" gutterBottom>
@@ -103,7 +103,7 @@ export const HomePage: React.FC = () => {
           </Card>
         </Grid>
 
-        <Grid  size = {{xs:12, md:4}}>
+        <Grid size = {{xs:12, md:4}}>
           <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <CardContent sx={{ flexGrow: 1 }}>
               <Typography variant="h5" component="h3" gutterBottom>
@@ -121,7 +121,7 @@ export const HomePage: React.FC = () => {
           </Card>
         </Grid>
 
-        <Grid  size = {{xs:12, md:4}}>
+        <Grid size = {{xs:12, md:4}}>
           <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <CardContent sx={{ flexGrow: 1 }}>
               <Typography variant="h5" component="h3" gutterBottom>

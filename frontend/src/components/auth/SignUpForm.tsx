@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container,
   Paper,
@@ -11,6 +11,7 @@ import {
   IconButton,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 
 export const SignUpForm: React.FC = () => {
@@ -18,12 +19,32 @@ export const SignUpForm: React.FC = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const { signUp, error, loading } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { signUp, error, loading, user } = useAuth();
+  const navigate = useNavigate();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Redirect when user is authenticated
+  useEffect(() => {
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
+
+  // Reset local loading state when global loading changes
+  useEffect(() => {
+    if (!loading) {
+      setIsSubmitting(false);
+    }
+  }, [loading]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password === confirmPassword) {
-      signUp({ email, password });
+      setIsSubmitting(true);
+      console.log('Sign up attempt with:', { email });
+      await signUp({ email, password });
+    } else {
+      console.log('Passwords do not match');
     }
   };
 
@@ -118,14 +139,15 @@ export const SignUpForm: React.FC = () => {
             fullWidth
             variant="contained"
             size="large"
-            disabled={loading}
+            disabled={isSubmitting}
             sx={{ 
               py: 1.5,
               fontWeight: 600,
               fontSize: '1.1rem',
             }}
+            disableElevation
           >
-            {loading ? 'Creating Account...' : 'Create Account'}
+            {isSubmitting ? 'Creating Account...' : 'Create Account'}
           </Button>
         </Box>
       </Paper>
