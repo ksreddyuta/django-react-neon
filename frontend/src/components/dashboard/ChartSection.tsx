@@ -33,7 +33,7 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
   const { user } = useAuth();
   
   const { data, loading, error, hasMore, loadMore, changePollutant } = 
-    useOptimizedDataFetch('/api/air-quality/', deviceId || '', selectedPollutant);
+    useOptimizedDataFetch(deviceId || '', selectedPollutant);
 
   // Get current pollutant info for labels
   const currentPollutant = useMemo(() => 

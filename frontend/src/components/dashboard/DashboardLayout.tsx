@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Container,
   Typography,
@@ -25,16 +25,23 @@ import { ChartSection } from "../dashboard/ChartSection";
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
+  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h3" component="h1" gutterBottom sx={{ fontWeight: 600 }}>
+        <Typography
+          variant="h3"
+          component="h1"
+          gutterBottom
+          sx={{ fontWeight: 600 }}
+        >
           Air Quality Dashboard
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Welcome back, {user?.email}! Monitor air quality across Texas in real-time.
+          Welcome back, {user?.email}! Monitor air quality across Texas in
+          real-time.
         </Typography>
       </Box>
 
@@ -43,11 +50,23 @@ export const DashboardPage: React.FC = () => {
         {/* Left Column - User Details */}
         <Grid size={{ xs: 12, md: 4, lg: 3 }}>
           <Paper sx={{ p: 3, position: "sticky", top: 20 }}>
-            <Typography variant="h5" component="h2" gutterBottom sx={{ fontWeight: 600 }}>
+            <Typography
+              variant="h5"
+              component="h2"
+              gutterBottom
+              sx={{ fontWeight: 600 }}
+            >
               User Profile
             </Typography>
 
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", mb: 3 }}>
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                mb: 3,
+              }}
+            >
               <Avatar
                 sx={{
                   width: 80,
@@ -65,7 +84,12 @@ export const DashboardPage: React.FC = () => {
               <Typography variant="body2" color="text.secondary" align="center">
                 {user?.username || "Air Quality Analyst"}
               </Typography>
-              <Chip label="Premium Account" color="primary" size="small" sx={{ mt: 1 }} />
+              <Chip
+                label="Premium Account"
+                color="primary"
+                size="small"
+                sx={{ mt: 1 }}
+              />
             </Box>
 
             <Divider sx={{ my: 2 }} />
@@ -81,7 +105,10 @@ export const DashboardPage: React.FC = () => {
                 <ListItemIcon>
                   <PersonIcon color="primary" />
                 </ListItemIcon>
-                <ListItemText primary="Member Since" secondary="January 15, 2024" />
+                <ListItemText
+                  primary="Member Since"
+                  secondary="January 15, 2024"
+                />
               </ListItem>
               <ListItem>
                 <ListItemIcon>
@@ -93,7 +120,10 @@ export const DashboardPage: React.FC = () => {
                 <ListItemIcon>
                   <CalendarIcon color="primary" />
                 </ListItemIcon>
-                <ListItemText primary="Last Login" secondary="Today, 10:30 AM" />
+                <ListItemText
+                  primary="Last Login"
+                  secondary="Today, 10:30 AM"
+                />
               </ListItem>
             </List>
 
@@ -109,7 +139,9 @@ export const DashboardPage: React.FC = () => {
                   12,456
                 </Typography>
               </Box>
-              <Box sx={{ display: "flex", justifyContent: "space-between", mt: 1 }}>
+              <Box
+                sx={{ display: "flex", justifyContent: "space-between", mt: 1 }}
+              >
                 <Typography variant="body2" color="text.secondary">
                   Stations Monitored:
                 </Typography>
@@ -126,35 +158,63 @@ export const DashboardPage: React.FC = () => {
           <Grid container spacing={4}>
             {/* Map Section */}
             <Grid size={{ xs: 12 }}>
-              <MapSection />
+              <MapSection
+                onDeviceSelect={setSelectedDevice}
+                selectedDevice={selectedDevice}
+              />
             </Grid>
 
             {/* Chart Section */}
             <Grid size={{ xs: 12 }}>
-              <ChartSection />
+              <ChartSection deviceId={selectedDevice} />
             </Grid>
 
             {/* Quick Stats */}
             <Grid size={{ xs: 12 }}>
               <Grid container spacing={3}>
                 <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Paper sx={{ p: 2, textAlign: "center", bgcolor: "success.light", color: "success.contrastText" }}>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      textAlign: "center",
+                      bgcolor: "success.light",
+                      color: "success.contrastText",
+                    }}
+                  >
                     <Typography variant="h4" component="div" gutterBottom>
                       45
                     </Typography>
-                    <Typography variant="body2">Good Air Quality Days</Typography>
+                    <Typography variant="body2">
+                      Good Air Quality Days
+                    </Typography>
                   </Paper>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Paper sx={{ p: 2, textAlign: "center", bgcolor: "warning.light", color: "warning.contrastText" }}>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      textAlign: "center",
+                      bgcolor: "warning.light",
+                      color: "warning.contrastText",
+                    }}
+                  >
                     <Typography variant="h4" component="div" gutterBottom>
                       12
                     </Typography>
-                    <Typography variant="body2">Moderate Air Quality Days</Typography>
+                    <Typography variant="body2">
+                      Moderate Air Quality Days
+                    </Typography>
                   </Paper>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Paper sx={{ p: 2, textAlign: "center", bgcolor: "error.light", color: "error.contrastText" }}>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      textAlign: "center",
+                      bgcolor: "error.light",
+                      color: "error.contrastText",
+                    }}
+                  >
                     <Typography variant="h4" component="div" gutterBottom>
                       3
                     </Typography>
@@ -162,7 +222,14 @@ export const DashboardPage: React.FC = () => {
                   </Paper>
                 </Grid>
                 <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-                  <Paper sx={{ p: 2, textAlign: "center", bgcolor: "info.light", color: "info.contrastText" }}>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      textAlign: "center",
+                      bgcolor: "info.light",
+                      color: "info.contrastText",
+                    }}
+                  >
                     <Typography variant="h4" component="div" gutterBottom>
                       24
                     </Typography>

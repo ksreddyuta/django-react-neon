@@ -41,7 +41,7 @@ const fetchData = async (url: string) => {
   }
 };
 
-export const useOptimizedDataFetch = (endpoint: string, deviceId: string, pollutant: string) => {
+export const useOptimizedDataFetch = (deviceId: string, pollutant: string) => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
