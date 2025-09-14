@@ -13,7 +13,14 @@ urlpatterns = [
     path('users/', views.UserListView.as_view(), name='user-list'),
     path('users/<int:pk>/', views.UserDetailView.as_view(), name='user-detail'),
     
-    # Air quality data endpoints - updated to use device_id instead of device
+    # Sensor API proxy endpoints
+    path('sensor/health/', views.sensor_api_health, name='sensor_api_health'),
+    path('sensor/sites/', views.sensor_api_sites, name='sensor_api_sites'),
+    path('sensor/th/', views.sensor_api_th_data, name='sensor_api_th_data'),
+    path('sensor/voc/', views.sensor_api_voc_data, name='sensor_api_voc_data'),
+    path('sensor/multi-device/', views.sensor_api_multi_device_data, name='sensor_api_multi_device_data'),
+    
+    # Air quality data endpoints
     path('devices/', views.get_devices, name='get_devices'),
     path('pollutants/', views.get_pollutants, name='get_pollutants'),
     path('air-quality/<str:device_id>/<str:pollutant>/', views.get_air_quality_data, name='get_air_quality_data'),
@@ -31,11 +38,7 @@ urlpatterns = [
 
     # File Exports
     path('download-export/<int:file_id>/', views.download_exported_file, name='download_exported_file'),
+    path('export/sensor/th/', views.export_sensor_th_data, name='export_sensor_th_data'),
+    path('export/sensor/voc/', views.export_sensor_voc_data, name='export_sensor_voc_data'),
+    path('export/multi-device/', views.export_multi_device_data, name='export_multi_device_data'),
 ]
-
-# Serve exported files in development
-from django.conf import settings
-from django.conf.urls.static import static
-
-if settings.DEBUG:
-    urlpatterns += static(settings.EXPORT_URL, document_root=settings.EXPORT_ROOT)

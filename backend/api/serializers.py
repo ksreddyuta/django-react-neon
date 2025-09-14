@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from rest_framework import serializers
-from .models import AirQualityData, BatteryData, WeatherData, ExportedFile
+from .models import ExportedFile
 import re
 
 User = get_user_model()
@@ -18,7 +18,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         """
         Check if email already exists and validate format
         """
-        # Validate email format
+        # Fixed regex pattern (removed extra '00')
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', value):
             raise serializers.ValidationError("Enter a valid email address")
         

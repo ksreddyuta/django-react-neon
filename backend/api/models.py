@@ -30,6 +30,10 @@ class CustomUserManager(BaseUserManager):
             if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
                 raise ValueError('Password must contain at least one special character')
         
+        # Set default role if not provided
+        if 'role' not in extra_fields:
+            extra_fields['role'] = 'user'
+            
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save()
@@ -83,68 +87,6 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         if CustomUser.objects.filter(email=self.email).exclude(pk=self.pk).exists():
             raise ValidationError('Email already exists')
 
-# Air Quality Data Model
-class AirQualityData(models.Model):
-    site_name = models.CharField(max_length=50, db_column='SiteName')
-    reported_time_utc = models.DateTimeField(db_column='ReportedTime-UTC')
-    voc = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, db_column='VOC')
-    o3 = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, db_column='O3')
-    so2 = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, db_column='SO2')
-    no2 = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True, db_column='NO2')
-    received_time = models.DateTimeField(null=True, blank=True, db_column='ReceivedTime')
-    
-    class Meta:
-        db_table = '"AirQualityData-VOC-V6_1"'
-        managed = False
-
-# Battery Data Model
-class BatteryData(models.Model):
-    site_name = models.CharField(max_length=50, db_column='SiteName')
-    reported_time_utc = models.DateTimeField(db_column='ReportedTime-UTC')
-    corrected_battery_voltage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='corrected_battery_voltage')
-    received_time = models.DateTimeField(null=True, blank=True, db_column='ReceivedTime')
-    
-    class Meta:
-        db_table = '"AirQualityData-battery-V6_1"'
-        managed = False
-
-# Weather Data Model
-class WeatherData(models.Model):
-    location = models.CharField(max_length=100, null=True, blank=True, db_column='location')
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, db_column='latitude')
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, db_column='longitude')
-    elevation = models.IntegerField(null=True, blank=True, db_column='elevation')
-    temperature = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True, db_column='temperature')
-    windspeed = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True, db_column='windspeed')
-    winddirection = models.SmallIntegerField(null=True, blank=True, db_column='winddirection')
-    is_day = models.CharField(max_length=10, null=True, blank=True, db_column='is_day')
-    weathercode = models.SmallIntegerField(null=True, blank=True, db_column='weathercode')
-    humidity = models.SmallIntegerField(null=True, blank=True, db_column='humidity')
-    solar_radiation = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column='solar_radiation')
-    pressure = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, db_column='pressure')
-    data_time_local = models.DateTimeField(null=True, blank=True, db_column='data_time_local')
-    data_time_utc = models.DateTimeField(null=True, blank=True, db_column='data_time_utc')
-    fetch_time = models.DateTimeField(null=True, blank=True, db_column='fetch_time')
-    
-    class Meta:
-        db_table = '"AirQualityData-CorpusChristiWeather-V6_1"'
-        managed = False
-
-class THData(models.Model):
-    site_name = models.CharField(max_length=50, db_column='SiteName')
-    time = models.DateTimeField(db_column='Time')
-    humidity = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='humidity')
-    temperature = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='temperature')
-    noise = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='noise')
-    pm2_5 = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='PM2_5')
-    pm10 = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, db_column='PM10')
-    illumination = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, db_column='Illumination')
-    mqtt_sent = models.IntegerField(default=0, db_column='mqttSent')
-    
-    class Meta:
-        db_table = '"AirQualityData-TH-V6_1"'
-        managed = False
-
 # Device Group Models
 class DeviceGroup(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -189,3 +131,10 @@ class ExportedFile(models.Model):
     def is_expired(self):
         from django.utils import timezone
         return timezone.now() > self.expires_at
+    
+    def get_file_format(self):
+        """Get the file format based on filename extension"""
+        if self.filename.endswith('.json'):
+            return 'json'
+        else:
+            return 'csv'
