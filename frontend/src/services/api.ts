@@ -12,8 +12,7 @@ import type {
 } from '../types/airQuality';
 
 const api = axios.create({
-  // baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api',
-  baseURL: import.meta.env.VITE_API_URL || 'https://django-react-neon.onrender.com/api',
+  baseURL: 'https://django-react-neon.onrender.com/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -66,11 +65,35 @@ api.interceptors.response.use(
   }
 );
 
+// Helper function to format date for API requests
+const formatDateForAPI = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
 export const airQualityService = {
   getAirQualityData: async (device_id: string, pollutant: string, days: number = 30): Promise<AirQualityResponse> => {
     try {
       console.log(`Fetching air quality data for device: ${device_id}, pollutant: ${pollutant}, days: ${days}`);
-      const response = await api.get(`/air-quality/${device_id}/${pollutant}/?days=${days}`);
+      
+      // Calculate start and end times
+      const endTime = new Date();
+      const startTime = new Date();
+      startTime.setDate(endTime.getDate() - days);
+      
+      const response = await api.get(`/air-quality/${device_id}/${pollutant}/`, {
+        params: {
+          start_time: formatDateForAPI(startTime),
+          end_time: formatDateForAPI(endTime)
+        }
+      });
+      
       console.log('Air quality data response:', response.data);
       
       return {
@@ -92,12 +115,37 @@ export const airQualityService = {
   getMultiDeviceData: async (devices: string[], pollutant: string, days: number = 30): Promise<AirQualityResponse[]> => {
     try {
       console.log(`Fetching multi-device data for devices: ${devices.join(', ')}, pollutant: ${pollutant}`);
-      const requests = devices.map(device => 
-        airQualityService.getAirQualityData(device, pollutant, days)
-      );
-      const responses = await Promise.all(requests);
-      console.log('Multi-device data response:', responses);
-      return responses;
+      
+      // Calculate start and end times
+      const endTime = new Date();
+      const startTime = new Date();
+      startTime.setDate(endTime.getDate() - days);
+      
+      // Format device names for the API
+      const siteNames = devices.map(device => device.replace('aq_', ''));
+      
+      const response = await api.get('/sensor/multi-device/', {
+        params: {
+          device_type: 'th',
+          start_time: formatDateForAPI(startTime),
+          end_time: formatDateForAPI(endTime),
+          site_names: siteNames
+        }
+      });
+      
+      console.log('Multi-device data response:', response.data);
+      
+      // Transform the response to match the expected format
+      return devices.map(deviceId => ({
+        device: deviceId,
+        pollutant: pollutant,
+        data: response.data.filter((item: any) => item.device_id === deviceId).map((item: any) => ({
+          timestamp: item.timestamp,
+          value: item.value,
+          site_name: item.site_name,
+          pollutant: pollutant
+        }))
+      }));
     } catch (error) {
       console.error('Error fetching multi-device data:', error);
       throw error;

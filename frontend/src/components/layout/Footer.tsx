@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Typography } from '@mui/material'
+import { Box, Typography, Link } from '@mui/material'
 
 export const Footer: React.FC = () => {
   return (
@@ -17,10 +17,12 @@ export const Footer: React.FC = () => {
       <Box
         sx={{
           display: 'flex',
-          justifyContent: 'center',
+          flexDirection: { xs: 'column', sm: 'row' },
+          justifyContent: 'space-between',
           alignItems: 'center',
           maxWidth: 1200,
           mx: 'auto',
+          gap: 2,
         }}
       >
         <Typography
@@ -31,8 +33,35 @@ export const Footer: React.FC = () => {
             fontSize: '0.875rem',
           }}
         >
-          © {new Date().getFullYear()} DJANGO-REACT-NEON. All rights reserved.
+          © {new Date().getFullYear()} University of Texas at Arlington - Air Quality Research Project
         </Typography>
+        
+        <Box sx={{ display: 'flex', gap: 3 }}>
+          <Link
+            href="#"
+            variant="body2"
+            color="text.secondary"
+            sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+          >
+            About
+          </Link>
+          <Link
+            href="#"
+            variant="body2"
+            color="text.secondary"
+            sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+          >
+            Privacy
+          </Link>
+          <Link
+            href="#"
+            variant="body2"
+            color="text.secondary"
+            sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+          >
+            Contact
+          </Link>
+        </Box>
       </Box>
     </Box>
   )

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Paper,
   Typography,
@@ -10,7 +10,6 @@ import {
   MenuItem,
   Chip,
   CircularProgress,
-  Button,
   Alert,
 } from "@mui/material";
 import {
@@ -24,7 +23,6 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { MapLocation, Device } from "../../types/airQuality";
 import { airQualityService } from "../../services/api";
-import { useAuth } from "../../hooks/useAuth";
 
 // Fix for default markers in react-leaflet
 L.Icon.Default.mergeOptions({
@@ -36,7 +34,7 @@ L.Icon.Default.mergeOptions({
     "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
 });
 
-// Corpus Christi coordinates (new default)
+// Corpus Christi coordinates
 const CORPUS_CHRISTI_CENTER: [number, number] = [27.8006, -97.3964];
 
 // Custom hook to update map view
@@ -51,50 +49,36 @@ const MapViewUpdater: React.FC<{ center: [number, number]; zoom: number }> = ({
   return null;
 };
 
-// Topography tile layer
-const TopographyTileLayer: React.FC = () => (
-  <TileLayer
-    url="https://{s}.tile.openttopomap.org/{z}/{x}/{y}.png"
-    attribution='Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://openttopomap.org">OpenTopoMap</a>'
-  />
-);
-
-// Standard tile layer
-const StandardTileLayer: React.FC = () => (
-  <TileLayer
-    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  />
-);
-
 // Custom marker icon based on AQI
-const createCustomIcon = (aqi: number) => {
+const createCustomIcon = (aqi: number, isSelected: boolean = false) => {
   let color = "green";
   if (aqi > 100) color = "red";
   else if (aqi > 50) color = "orange";
 
+  const border = isSelected ? "3px solid #2196f3" : "2px solid white";
+  const size = isSelected ? 24 : 20;
+
   return L.divIcon({
     className: "custom-marker",
-    html: `<div style="background-color: ${color}; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">${aqi}</div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
+    html: `<div style="background-color: ${color}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${border}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${aqi}</div>`,
+    iconSize: [size + 4, size + 4],
+    iconAnchor: [(size + 4) / 2, (size + 4) / 2],
   });
 };
 
 // Define the props interface
 interface MapSectionProps {
-  onDeviceSelect: (deviceId: string) => void;
-  selectedDevice: string | null;
+  onDeviceSelect: (deviceIds: string[]) => void;
+  selectedDevices: string[];
 }
 
-export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selectedDevice }) => {
-  const [mapType, setMapType] = useState<"standard" | "topography">("standard");
+export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selectedDevices }) => {
   const [locations, setLocations] = useState<MapLocation[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { user } = useAuth();
+  const mapRef = useRef<any>(null);
 
   useEffect(() => {
     const fetchDevices = async () => {
@@ -120,8 +104,7 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
         setError(null);
         
         // Generate mock map locations based on devices
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const mockLocations: MapLocation[] = devices.map((device, _index) => {
+        const mockLocations: MapLocation[] = devices.map((device) => {
           // Create coordinates around Corpus Christi area
           const lat = CORPUS_CHRISTI_CENTER[0] + (Math.random() - 0.5) * 0.1;
           const lng = CORPUS_CHRISTI_CENTER[1] + (Math.random() - 0.5) * 0.1;
@@ -130,7 +113,7 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
             lat,
             lng,
             name: device.display_name || device.name,
-            aqi: Math.floor(Math.random() * 100) + 1, // Random AQI between 1-100
+            aqi: Math.floor(Math.random() * 100) + 1,
             lastUpdated: new Date().toISOString(),
             device: device.id
           };
@@ -178,53 +161,29 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
   }, [devices]);
 
   const handleDeviceChange = (event: any) => {
-    const deviceId = event.target.value;
-    onDeviceSelect(deviceId);
-  };
-
-  const downloadAllDataCSV = async () => {
-    try {
-      // Use the first air quality device for export
-      const airQualityDevices = devices.filter(d => d.type === 'air_quality');
-      if (airQualityDevices.length === 0) {
-        alert('No air quality devices available for export');
-        return;
+    const deviceIds = event.target.value;
+    onDeviceSelect(deviceIds);
+    
+    // Center map on selected devices
+    if (deviceIds.length > 0 && mapRef.current) {
+      const selectedLocations = locations.filter(loc => deviceIds.includes(loc.device || ''));
+      if (selectedLocations.length > 0) {
+        const centerLat = selectedLocations.reduce((sum, loc) => sum + loc.lat, 0) / selectedLocations.length;
+        const centerLng = selectedLocations.reduce((sum, loc) => sum + loc.lng, 0) / selectedLocations.length;
+        mapRef.current.setView([centerLat, centerLng], 12);
       }
-      
-      const deviceId = airQualityDevices[0].id;
-      const pollutant = 'VOC';
-      
-      // Use the CSV export endpoint
-      const response = await fetch(`http://localhost:8000/api/air-quality/${encodeURIComponent(deviceId)}/${encodeURIComponent(pollutant)}/?format=csv`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data.download_url) {
-        // Open the download URL in a new tab
-        window.open(data.download_url, '_blank');
-      } else if (data.message) {
-        alert(data.message);
-      }
-    } catch (error) {
-      console.error('Failed to download CSV:', error);
-      alert('Failed to download CSV. Please try again.');
     }
   };
 
-  const selectedLocation = selectedDevice 
-    ? locations.find(loc => loc.device === selectedDevice)
-    : null;
+  const selectedLocations = selectedDevices.length > 0
+    ? locations.filter(loc => selectedDevices.includes(loc.device || ''))
+    : locations;
 
-  const mapCenter = selectedLocation 
-    ? [selectedLocation.lat, selectedLocation.lng] as [number, number]
+  const mapCenter = selectedLocations.length > 0
+    ? [
+        selectedLocations.reduce((sum, loc) => sum + loc.lat, 0) / selectedLocations.length,
+        selectedLocations.reduce((sum, loc) => sum + loc.lng, 0) / selectedLocations.length
+      ] as [number, number]
     : CORPUS_CHRISTI_CENTER;
 
   if (loading || devicesLoading) {
@@ -256,16 +215,24 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
         }}
       >
         <Typography variant="h5" component="h2" sx={{ fontWeight: 600 }}>
-          Texas Air Quality Map
+          Corpus Christi Air Quality Map
         </Typography>
         
         <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel>Device</InputLabel>
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel>Devices</InputLabel>
             <Select
-              value={selectedDevice || ""}
-              label="Device"
+              multiple
+              value={selectedDevices}
+              label="Devices"
               onChange={handleDeviceChange}
+              renderValue={(selected) => (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {selected.map((value) => (
+                    <Chip key={value} label={devices.find(d => d.id === value)?.display_name || value} size="small" />
+                  ))}
+                </Box>
+              )}
             >
               {devices.map((device) => (
                 <MenuItem key={device.id} value={device.id}>
@@ -274,30 +241,6 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
               ))}
             </Select>
           </FormControl>
-          
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel>Map Type</InputLabel>
-            <Select
-              value={mapType}
-              label="Map Type"
-              onChange={(e) =>
-                setMapType(e.target.value as "standard" | "topography")
-              }
-            >
-              <MenuItem value="standard">Standard</MenuItem>
-              <MenuItem value="topography">Topography</MenuItem>
-            </Select>
-          </FormControl>
-
-          {(user?.role === 'admin' || user?.role === 'superadmin') && (
-            <Button 
-              variant="outlined" 
-              onClick={downloadAllDataCSV}
-              size="small"
-            >
-              Export Sample Data
-            </Button>
-          )}
         </Box>
       </Box>
 
@@ -310,50 +253,65 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
       <Box sx={{ height: 320, borderRadius: 1, overflow: "hidden" }}>
         <MapContainer
           center={mapCenter}
-          zoom={selectedLocation ? 12 : 10}
+          zoom={selectedLocations.length > 0 ? 12 : 10}
           style={{ height: "100%", width: "100%" }}
           zoomControl={true}
+          ref={mapRef}
         >
-          <MapViewUpdater center={mapCenter} zoom={selectedLocation ? 12 : 10} />
-          {mapType === "topography" ? (
-            <TopographyTileLayer />
-          ) : (
-            <StandardTileLayer />
-          )}
+          <MapViewUpdater center={mapCenter} zoom={selectedLocations.length > 0 ? 12 : 10} />
+          
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          />
 
-          {locations.map((location, index) => (
-            <Marker
-              key={index}
-              position={[location.lat, location.lng]}
-              icon={createCustomIcon(location.aqi)}
-            >
-              <Popup>
-                <Box>
-                  <Typography variant="subtitle1" gutterBottom>
-                    {location.name}
-                  </Typography>
-                  <Chip
-                    label={`AQI: ${location.aqi}`}
-                    color={
-                      location.aqi <= 50
-                        ? "success"
-                        : location.aqi <= 100
-                        ? "warning"
-                        : "error"
+          {locations.map((location, index) => {
+            const isSelected = selectedDevices.includes(location.device || '');
+            return (
+              <Marker
+                key={index}
+                position={[location.lat, location.lng]}
+                icon={createCustomIcon(location.aqi, isSelected)}
+                eventHandlers={{
+                  click: () => {
+                    if (location.device) {
+                      if (isSelected) {
+                        onDeviceSelect(selectedDevices.filter(id => id !== location.device));
+                      } else {
+                        onDeviceSelect([...selectedDevices, location.device]);
+                      }
                     }
-                    size="small"
-                  />
-                  <Typography variant="body2" sx={{ mt: 1 }}>
-                    Device: {location.device}
-                  </Typography>
-                  <Typography variant="body2" sx={{ mt: 1 }}>
-                    Last updated:{" "}
-                    {new Date(location.lastUpdated).toLocaleString()}
-                  </Typography>
-                </Box>
-              </Popup>
-            </Marker>
-          ))}
+                  }
+                }}
+              >
+                <Popup>
+                  <Box>
+                    <Typography variant="subtitle1" gutterBottom>
+                      {location.name}
+                    </Typography>
+                    <Chip
+                      label={`AQI: ${location.aqi}`}
+                      color={
+                        location.aqi <= 50
+                          ? "success"
+                          : location.aqi <= 100
+                          ? "warning"
+                          : "error"
+                      }
+                      size="small"
+                    />
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      Device: {location.device}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      Last updated:{" "}
+                      {new Date(location.lastUpdated).toLocaleString()}
+                    </Typography>
+                  </Box>
+                </Popup>
+              </Marker>
+            );
+          })}
         </MapContainer>
       </Box>
     </Paper>

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useCallback } from 'react';
 
-const API_BASE_URL = 'https://django-react-neon.onrender.com';
+const API_BASE_URL = 'https://django-react-neon.onrender.com/api';
 
 const fetchData = async (url: string) => {
   try {
@@ -41,15 +41,52 @@ const fetchData = async (url: string) => {
   }
 };
 
-export const useOptimizedDataFetch = (deviceId: string, pollutant: string) => {
+export const useOptimizedDataFetch = (deviceId: string, metric: string, timeRange: string = 'week') => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextPage, setNextPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState(true);
 
-  const loadData = useCallback(async (page: number, currentPollutant: string, reset: boolean = false) => {
-    if (!deviceId || !currentPollutant) {
+  // Calculate start and end times based on timeRange
+  const getTimeRangeParams = () => {
+    const now = new Date();
+    const startTime = new Date();
+    
+    switch (timeRange) {
+      case 'day':
+        startTime.setDate(now.getDate() - 1);
+        break;
+      case 'week':
+        startTime.setDate(now.getDate() - 7);
+        break;
+      case 'month':
+        startTime.setMonth(now.getMonth() - 1);
+        break;
+      default:
+        startTime.setDate(now.getDate() - 7);
+    }
+    
+    // Format dates as YYYY-MM-DD HH:MM:SS
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    };
+    
+    return {
+      start_time: formatDate(startTime),
+      end_time: formatDate(now)
+    };
+  };
+
+  const loadData = useCallback(async (page: number, currentMetric: string, reset: boolean = false) => {
+    if (!deviceId || !currentMetric) {
       setData([]);
       setHasMore(false);
       return;
@@ -59,30 +96,35 @@ export const useOptimizedDataFetch = (deviceId: string, pollutant: string) => {
       setLoading(true);
       setError(null);
       
-      // Construct the proper URL
-      const baseUrl = `${API_BASE_URL}/api/air-quality/${deviceId}/${currentPollutant}/`;
+      // Get time range parameters
+      const timeParams = getTimeRangeParams();
+      
+      // Construct the proper URL with time range
+      const baseUrl = `${API_BASE_URL}/air-quality/${deviceId}/${currentMetric}/`;
       const queryParams = new URLSearchParams({
+        start_time: timeParams.start_time,
+        end_time: timeParams.end_time,
         page: page.toString(),
         limit: '500',
-        downsample: 'true'
       });
+      
       const url = `${baseUrl}?${queryParams.toString()}`;
+      console.log('Fetching from URL:', url);
       
       const response = await fetchData(url);
       
       // Handle response
-      if (response && response.data && Array.isArray(response.data)) {
+      if (response && Array.isArray(response)) {
         if (reset) {
-          setData(response.data);
+          setData(response);
         } else {
-          setData(prev => [...prev, ...response.data]);
+          setData(prev => [...prev, ...response]);
         }
         
         // Update pagination info
-        const { pagination } = response;
-        const hasMoreData = pagination.page < pagination.pages;
-        setHasMore(hasMoreData);
-        setNextPage(hasMoreData ? page + 1 : page);
+        // Assuming the API returns all data at once for now
+        setHasMore(false);
+        setNextPage(page);
       } else {
         console.error('Unexpected API response format:', response);
         setError('Unexpected data format from server');
@@ -95,27 +137,27 @@ export const useOptimizedDataFetch = (deviceId: string, pollutant: string) => {
     } finally {
       setLoading(false);
     }
-  }, [deviceId]);
+  }, [deviceId, timeRange]);
 
-  const changePollutant = useCallback((newPollutant: string) => {
+  const changeMetric = useCallback((newMetric: string) => {
     setData([]);
     setNextPage(1);
     setHasMore(true);
-    loadData(1, newPollutant, true);
+    loadData(1, newMetric, true);
   }, [loadData]);
 
   const loadMore = useCallback(() => {
     if (hasMore && !loading) {
-      loadData(nextPage, pollutant, false);
+      loadData(nextPage, metric, false);
     }
-  }, [hasMore, loading, nextPage, pollutant, loadData]);
+  }, [hasMore, loading, nextPage, metric, loadData]);
 
   useEffect(() => {
     setData([]);
     setNextPage(1);
     setHasMore(true);
-    loadData(1, pollutant, true);
-  }, [deviceId, pollutant, loadData]);
+    loadData(1, metric, true);
+  }, [deviceId, metric, timeRange, loadData]);
 
-  return { data, loading, error, hasMore, loadMore, changePollutant };
+  return { data, loading, error, hasMore, loadMore, changeMetric };
 };

@@ -15,61 +15,40 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { useOptimizedDataFetch } from '../../hooks/useOptimizedDataFetch';
 import { useAuth } from '../../hooks/useAuth';
 
-// Pollutant options with labels and units - updated to match API response
-const POLLUTANT_OPTIONS = [
-  { value: 'VOC', label: 'Volatile Organic Compounds', unit: 'ppb' },
-  { value: 'O3', label: 'Ozone', unit: 'ppb' },
-  { value: 'SO2', label: 'Sulfur Dioxide', unit: 'ppb' },
-  { value: 'NO2', label: 'Nitrogen Dioxide', unit: 'ppb' },
+// Metrics options with labels and units
+const METRICS_OPTIONS = [
+  { value: 'VOC', name: 'Volatile Organic Compounds', shortName: 'VOC', unit: 'ppb' },
+  { value: 'O3', name: 'Ozone', shortName: 'O₃', unit: 'ppb' },
+  { value: 'SO2', name: 'Sulfur Dioxide', shortName: 'SO₂', unit: 'ppb' },
+  { value: 'NO2', name: 'Nitrogen Dioxide', shortName: 'NO₂', unit: 'ppb' },
+  { value: 'PM2_5', name: 'PM2.5', shortName: 'PM₂.₅', unit: 'μg/m³' },
+  { value: 'PM10', name: 'PM10', shortName: 'PM₁₀', unit: 'μg/m³' },
+  { value: 'Humidity', name: 'Humidity', shortName: 'RH', unit: '%' },
+  { value: 'Temperature', name: 'Temperature', shortName: 'Temp', unit: '°C' },
+  { value: 'Noise', name: 'Noise', shortName: 'Noise', unit: 'dB' },
+  { value: 'Illumination', name: 'Illumination', shortName: 'Light', unit: 'lux' },
 ];
 
 // Define the props interface
 interface ChartSectionProps {
-  deviceId: string | null;
+  deviceIds: string[];
+  pollutant: string;
+  timeRange: string;
 }
 
-export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
-  const [selectedPollutant, setSelectedPollutant] = useState('VOC');
+export const ChartSection: React.FC<ChartSectionProps> = ({ deviceIds, pollutant, timeRange }) => {
+  const [selectedMetric, setSelectedMetric] = useState(pollutant);
   const { user } = useAuth();
   
-  const { data, loading, error, hasMore, loadMore, changePollutant } = 
-    useOptimizedDataFetch(deviceId || '', selectedPollutant);
+  // Using the first device for demonstration - in a real app you might want to handle multiple devices
+  const { data, loading, error, hasMore, loadMore, changeMetric } = 
+    useOptimizedDataFetch(deviceIds[0] || '', selectedMetric, timeRange);
 
-  // Get current pollutant info for labels
-  const currentPollutant = useMemo(() => 
-    POLLUTANT_OPTIONS.find(opt => opt.value === selectedPollutant) || 
-    { value: selectedPollutant, label: selectedPollutant, unit: '' },
-  [selectedPollutant]);
-
-  // Download data as CSV
-  const downloadCSV = async () => {
-    if (!deviceId || !selectedPollutant) return;
-    
-    try {
-      // Use the CSV export endpoint
-      const response = await fetch(`http://localhost:8000/api/air-quality/${encodeURIComponent(deviceId)}/${encodeURIComponent(selectedPollutant)}/?format=csv`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const responseData = await response.json();
-      
-      if (responseData.download_url) {
-        // Create download link for the CSV file
-        window.open(responseData.download_url, '_blank');
-      } else if (responseData.message) {
-        alert(responseData.message);
-      }
-    } catch (error) {
-      console.error('Failed to download CSV:', error);
-      alert('Failed to download CSV. Please try again.');
-    }
-  };
+  // Get current metric info for labels
+  const currentMetric = useMemo(() => 
+    METRICS_OPTIONS.find(opt => opt.value === selectedMetric) || 
+    { value: selectedMetric, name: selectedMetric, shortName: selectedMetric, unit: '' },
+  [selectedMetric]);
 
   // Prepare chart data
   const chartData = useMemo(() => {
@@ -82,16 +61,16 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
     }));
   }, [data]);
 
-  const handlePollutantChange = (event: any) => {
-    const newPollutant = event.target.value;
-    setSelectedPollutant(newPollutant);
-    changePollutant(newPollutant);
+  const handleMetricChange = (event: any) => {
+    const newMetric = event.target.value;
+    setSelectedMetric(newMetric);
+    changeMetric(newMetric);
   };
 
-  if (!deviceId) {
+  if (deviceIds.length === 0) {
     return (
       <Box sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
-        <Typography>Select a device to view data</Typography>
+        <Typography>Select devices on the map to view data</Typography>
       </Box>
     );
   }
@@ -100,21 +79,26 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
         <Typography variant="h5" component="h2">
-          Air Quality Data for {deviceId.replace('aq_', '').replace('bat_', '')}
+          Air Quality Data for {deviceIds.length} {deviceIds.length === 1 ? 'Device' : 'Devices'}
         </Typography>
         
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <FormControl sx={{ minWidth: 200 }} size="small">
-            <InputLabel id="pollutant-select-label">Pollutant</InputLabel>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <FormControl sx={{ minWidth: 120 }} size="small">
+            <InputLabel id="metric-select-label">Metric</InputLabel>
             <Select
-              labelId="pollutant-select-label"
-              value={selectedPollutant}
-              label="Pollutant"
-              onChange={handlePollutantChange}
+              labelId="metric-select-label"
+              value={selectedMetric}
+              label="Metric"
+              onChange={handleMetricChange}
             >
-              {POLLUTANT_OPTIONS.map(option => (
+              {METRICS_OPTIONS.map(option => (
                 <MenuItem key={option.value} value={option.value}>
-                  {option.label}
+                  <Box>
+                    <Typography variant="body2">{option.shortName}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {option.name}
+                    </Typography>
+                  </Box>
                 </MenuItem>
               ))}
             </Select>
@@ -123,7 +107,6 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
           {(user?.role === 'admin' || user?.role === 'superadmin') && (
             <Button 
               variant="outlined" 
-              onClick={downloadCSV}
               disabled={!data || data.length === 0}
             >
               Download CSV
@@ -140,7 +123,7 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
 
       {chartData.length === 0 && !loading && (
         <Typography sx={{ mb: 2, textAlign: 'center' }}>
-          No data available for the selected device and pollutant
+          No data available for the selected devices and metric
         </Typography>
       )}
 
@@ -166,21 +149,21 @@ export const ChartSection: React.FC<ChartSectionProps> = ({ deviceId }) => {
               />
               <YAxis 
                 label={{ 
-                  value: currentPollutant.unit, 
+                  value: currentMetric.unit, 
                   angle: -90, 
                   position: 'insideLeft',
                   offset: 10
                 }}
               />
               <Tooltip 
-                formatter={(value) => [`${value} ${currentPollutant.unit}`, currentPollutant.label]}
+                formatter={(value) => [`${value} ${currentMetric.unit}`, currentMetric.name]}
                 labelFormatter={(value) => new Date(Number(value)).toLocaleString()}
               />
               <Legend />
               <Line 
                 type="monotone" 
                 dataKey="value" 
-                name={currentPollutant.label}
+                name={currentMetric.name}
                 stroke="#8884d8" 
                 dot={false}
                 activeDot={{ r: 4 }} 

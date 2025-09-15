@@ -6,17 +6,39 @@ import {
   Button, 
   Box,
   useTheme,
-  useMediaQuery 
+  useMediaQuery,
+  Avatar,
+  Menu,
+  MenuItem,
+  IconButton,
+  Divider
 } from '@mui/material'
 import { ThemeToggle } from '../ui/ThemeToggle'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
+import { ExitToApp as LogoutIcon } from '@mui/icons-material'
 
 export const Navbar: React.FC = () => {
   const { user, logout } = useAuth()
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
   const location = useLocation()
+  const navigate = useNavigate()
+  const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null)
+
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget)
+  }
+
+  const handleMenuClose = () => {
+    setAnchorEl(null)
+  }
+
+  const handleLogout = () => {
+    handleMenuClose()
+    logout()
+    navigate('/')
+  }
 
   return (
     <AppBar 
@@ -45,7 +67,7 @@ export const Navbar: React.FC = () => {
             textDecoration: 'none',
           }}
         >
-          DJANGO-REACT-NEON
+          Air Quality Dashboard
         </Typography>
         
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -62,14 +84,55 @@ export const Navbar: React.FC = () => {
               >
                 Dashboard
               </Button>
-              <Button 
-                color="primary" 
-                variant="outlined"
-                onClick={logout}
-                size={isMobile ? 'small' : 'medium'}
+              
+              {/* User Profile Menu */}
+              <IconButton
+                onClick={handleMenuOpen}
+                sx={{
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: 2,
+                  p: 1,
+                }}
               >
-                Logout
-              </Button>
+                <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main' }}>
+                  {user?.email?.[0]?.toUpperCase() || "U"}
+                </Avatar>
+              </IconButton>
+              
+              <Menu
+                anchorEl={anchorEl}
+                open={Boolean(anchorEl)}
+                onClose={handleMenuClose}
+                PaperProps={{
+                  elevation: 3,
+                  sx: {
+                    mt: 1.5,
+                    minWidth: 200,
+                  }
+                }}
+              >
+                <MenuItem disabled>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Avatar sx={{ width: 32, height: 32, bgcolor: 'primary.main' }}>
+                      {user?.email?.[0]?.toUpperCase() || "U"}
+                    </Avatar>
+                    <Box>
+                      <Typography variant="body2" fontWeight="medium">
+                        {user.email}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {user.role}
+                      </Typography>
+                    </Box>
+                  </Box>
+                </MenuItem>
+                <Divider />
+                <MenuItem onClick={handleLogout}>
+                  <LogoutIcon sx={{ mr: 1, fontSize: 20 }} />
+                  Logout
+                </MenuItem>
+              </Menu>
             </>
           ) : (
             <>

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState } from "react";
 import {
   Container,
@@ -5,50 +6,149 @@ import {
   Box,
   Grid,
   Paper,
-  Avatar,
+  Tabs,
+  Tab,
   Chip,
-  Divider,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
+  Alert,
 } from "@mui/material";
-import {
-  Person as PersonIcon,
-  Email as EmailIcon,
-  CalendarToday as CalendarIcon,
-  LocationOn as LocationIcon,
-} from "@mui/icons-material";
 import { useAuth } from "../../hooks/useAuth";
-import { MapSection } from "../dashboard/MapSection";
-import { ChartSection } from "../dashboard/ChartSection";
+import { MapSection } from "../../components/dashboard/MapSection";
+import { ChartSection } from "../../components/dashboard/ChartSection";
+
+// Tab panel component
+function TabPanel(props: {
+  [x: string]: any;
+  children: any;
+  value: any;
+  index: any;
+}) {
+  const { children, value, index, ...other } = props;
+
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`pollutant-tabpanel-${index}`}
+      aria-labelledby={`pollutant-tab-${index}`}
+      {...other}
+    >
+      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
+    </div>
+  );
+}
+
+// Pollutant information
+const POLLUTANT_INFO = [
+  {
+    id: 'VOC',
+    name: 'Volatile Organic Compounds',
+    shortName: 'VOC',
+    unit: 'ppb',
+    description: 'Organic chemicals that have a high vapor pressure at room temperature.',
+    healthEffects: 'Eye, nose, and throat irritation; headaches; loss of coordination; nausea; damage to liver, kidney, and central nervous system.',
+    safeLevel: 'Below 500 ppb'
+  },
+  {
+    id: 'O3',
+    name: 'Ozone',
+    shortName: 'O₃',
+    unit: 'ppb',
+    description: 'A colorless gas that occurs both in the Earth\'s upper atmosphere and at ground level.',
+    healthEffects: 'Coughing, throat irritation, worsening of asthma, bronchitis, and emphysema.',
+    safeLevel: 'Below 70 ppb'
+  },
+  {
+    id: 'SO2',
+    name: 'Sulfur Dioxide',
+    shortName: 'SO₂',
+    unit: 'ppb',
+    description: 'A toxic gas with a pungent, irritating smell.',
+    healthEffects: 'Respiratory problems, including airway inflammation and bronchoconstriction.',
+    safeLevel: 'Below 75 ppb'
+  },
+  {
+    id: 'NO2',
+    name: 'Nitrogen Dioxide',
+    shortName: 'NO₂',
+    unit: 'ppb',
+    description: 'A reddish-brown gas with a sharp, biting odor.',
+    healthEffects: 'Airway inflammation, increased asthma symptoms, respiratory infections.',
+    safeLevel: 'Below 53 ppb'
+  },
+  {
+    id: 'PM2_5',
+    name: 'Fine Particulate Matter',
+    shortName: 'PM₂.₅',
+    unit: 'μg/m³',
+    description: 'Fine inhalable particles, with diameters that are generally 2.5 micrometers and smaller.',
+    healthEffects: 'Premature death in people with heart or lung disease, nonfatal heart attacks, irregular heartbeat, aggravated asthma, decreased lung function.',
+    safeLevel: 'Below 12 μg/m³'
+  },
+  {
+    id: 'PM10',
+    name: 'Coarse Particulate Matter',
+    shortName: 'PM₁₀',
+    unit: 'μg/m³',
+    description: 'Inhalable particles, with diameters that are generally 10 micrometers and smaller.',
+    healthEffects: 'Aggravated asthma, respiratory symptoms such as coughing or difficulty breathing.',
+    safeLevel: 'Below 54 μg/m³'
+  }
+];
 
 export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
-  const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+  const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
+  const [selectedPollutant, setSelectedPollutant] = useState(0);
+  const [timeRange, setTimeRange] = useState('week');
+
+  const handlePollutantChange = (_: React.SyntheticEvent, newValue: number) => {
+    setSelectedPollutant(newValue);
+  };
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
         <Typography
-          variant="h3"
+          variant="h4"
           component="h1"
           gutterBottom
           sx={{ fontWeight: 600 }}
         >
-          Air Quality Dashboard
+          Corpus Christi Air Quality Dashboard
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          Welcome back, {user?.email}! Monitor air quality across Texas in
+          Welcome back, {user?.email}! Monitor air quality across Corpus Christi in
           real-time.
         </Typography>
       </Box>
 
+      {/* Time Range Selector */}
+      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
+        <Typography variant="body2" fontWeight="medium">
+          Time Range:
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {['day', 'week', 'month'].map((range) => (
+            <Chip
+              key={range}
+              label={
+                range === 'day' ? '24 Hours' : 
+                range === 'week' ? '7 Days' : '30 Days'
+              }
+              variant={timeRange === range ? 'filled' : 'outlined'}
+              color={timeRange === range ? 'primary' : 'default'}
+              onClick={() => setTimeRange(range)}
+              clickable
+            />
+          ))}
+        </Box>
+      </Box>
+
       {/* Main Content Grid */}
-      <Grid container spacing={4} sx={{ mb: 10 }}>
-        {/* Left Column - User Details */}
-        <Grid size={{ xs: 12, md: 4, lg: 3 }}>
+      <Grid container spacing={4}>
+        {/* Left Column - Pollutant Information */}
+        <Grid size={{xs:12, md:4, lg:3}}>
           <Paper sx={{ p: 3, position: "sticky", top: 20 }}>
             <Typography
               variant="h5"
@@ -56,123 +156,99 @@ export const DashboardPage: React.FC = () => {
               gutterBottom
               sx={{ fontWeight: 600 }}
             >
-              User Profile
+              Air Quality Metrics
             </Typography>
 
-            <Box
-              sx={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                mb: 3,
-              }}
+            <Tabs
+              value={selectedPollutant}
+              onChange={handlePollutantChange}
+              orientation="vertical"
+              variant="scrollable"
+              sx={{ borderRight: 1, borderColor: 'divider', minHeight: 400 }}
             >
-              <Avatar
-                sx={{
-                  width: 80,
-                  height: 80,
-                  bgcolor: "primary.main",
-                  mb: 2,
-                  fontSize: "2rem",
-                }}
-              >
-                {user?.email?.[0]?.toUpperCase() || "U"}
-              </Avatar>
-              <Typography variant="h6" align="center">
-                {user?.email}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" align="center">
-                {user?.username || "Air Quality Analyst"}
-              </Typography>
-              <Chip
-                label="Premium Account"
-                color="primary"
-                size="small"
-                sx={{ mt: 1 }}
-              />
-            </Box>
-
-            <Divider sx={{ my: 2 }} />
-
-            <List dense>
-              <ListItem>
-                <ListItemIcon>
-                  <EmailIcon color="primary" />
-                </ListItemIcon>
-                <ListItemText primary="Email" secondary={user?.email} />
-              </ListItem>
-              <ListItem>
-                <ListItemIcon>
-                  <PersonIcon color="primary" />
-                </ListItemIcon>
-                <ListItemText
-                  primary="Member Since"
-                  secondary="January 15, 2024"
+              {POLLUTANT_INFO.map((pollutant) => (
+                <Tab 
+                  key={pollutant.id}
+                  label={
+                    <Box sx={{ textAlign: 'left', width: '100%' }}>
+                      <Typography variant="body2" fontWeight="medium">
+                        {pollutant.shortName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {pollutant.name}
+                      </Typography>
+                    </Box>
+                  } 
+                  sx={{ alignItems: 'flex-start', py: 1.5 }}
                 />
-              </ListItem>
-              <ListItem>
-                <ListItemIcon>
-                  <LocationIcon color="primary" />
-                </ListItemIcon>
-                <ListItemText primary="Location" secondary="Texas, USA" />
-              </ListItem>
-              <ListItem>
-                <ListItemIcon>
-                  <CalendarIcon color="primary" />
-                </ListItemIcon>
-                <ListItemText
-                  primary="Last Login"
-                  secondary="Today, 10:30 AM"
-                />
-              </ListItem>
-            </List>
-
-            <Box sx={{ mt: 3, p: 2, bgcolor: "grey.50", borderRadius: 2 }}>
-              <Typography variant="body2" gutterBottom sx={{ fontWeight: 500 }}>
-                Dashboard Usage
-              </Typography>
-              <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                <Typography variant="body2" color="text.secondary">
-                  Data Points:
-                </Typography>
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  12,456
-                </Typography>
-              </Box>
-              <Box
-                sx={{ display: "flex", justifyContent: "space-between", mt: 1 }}
-              >
-                <Typography variant="body2" color="text.secondary">
-                  Stations Monitored:
-                </Typography>
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  24
-                </Typography>
-              </Box>
-            </Box>
+              ))}
+            </Tabs>
           </Paper>
         </Grid>
 
-        {/* Right Column - Map and Charts */}
-        <Grid size={{ xs: 12, md: 8, lg: 9 }}>
+        {/* Right Column - Map, Charts, and Pollutant Details */}
+        <Grid size={{xs:12, md:8, lg:9}}>
           <Grid container spacing={4}>
+            {/* Pollutant Information Panel */}
+            <Grid size={{xs:12}}>
+              <Paper sx={{ p: 3 }}>
+                {POLLUTANT_INFO.map((pollutant, index) => (
+                  <TabPanel key={pollutant.id} value={selectedPollutant} index={index}>
+                    <Typography variant="h6" gutterBottom>
+                      {pollutant.name} ({pollutant.shortName})
+                    </Typography>
+                    <Typography variant="body2" paragraph>
+                      {pollutant.description}
+                    </Typography>
+                    <Box sx={{ mb: 2 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Health Effects:
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {pollutant.healthEffects}
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Safe Level:
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {pollutant.safeLevel}
+                      </Typography>
+                    </Box>
+                  </TabPanel>
+                ))}
+              </Paper>
+            </Grid>
+
             {/* Map Section */}
-            <Grid size={{ xs: 12 }}>
+            <Grid size={{xs:12}}>
               <MapSection
-                onDeviceSelect={setSelectedDevice}
-                selectedDevice={selectedDevice}
+                onDeviceSelect={setSelectedDevices}
+                selectedDevices={selectedDevices}
               />
             </Grid>
 
             {/* Chart Section */}
-            <Grid size={{ xs: 12 }}>
-              <ChartSection deviceId={selectedDevice} />
+            <Grid size={{xs:12}}>
+              <ChartSection 
+                deviceIds={selectedDevices} 
+                pollutant={POLLUTANT_INFO[selectedPollutant].id}
+                timeRange={timeRange}
+              />
             </Grid>
 
             {/* Quick Stats */}
-            <Grid size={{ xs: 12 }}>
+            <Grid size={{xs:12}}>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                <Typography variant="body2">
+                  <strong>UTA Research Project:</strong> This air quality monitoring system is part of a research initiative 
+                  at the University of Texas at Arlington to study urban air quality patterns and their health impacts.
+                </Typography>
+              </Alert>
+              
               <Grid container spacing={3}>
-                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <Grid size={{xs:12, sm:6, md:3}}>
                   <Paper
                     sx={{
                       p: 2,
@@ -189,7 +265,7 @@ export const DashboardPage: React.FC = () => {
                     </Typography>
                   </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <Grid size={{xs:12, sm:6, md:3}}>
                   <Paper
                     sx={{
                       p: 2,
@@ -206,7 +282,7 @@ export const DashboardPage: React.FC = () => {
                     </Typography>
                   </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <Grid size={{xs:12, sm:6, md:3}}>
                   <Paper
                     sx={{
                       p: 2,
@@ -221,7 +297,7 @@ export const DashboardPage: React.FC = () => {
                     <Typography variant="body2">Unhealthy Days</Typography>
                   </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                <Grid size={{xs:12, sm:6, md:3}}>
                   <Paper
                     sx={{
                       p: 2,
@@ -231,7 +307,7 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      24
+                      20
                     </Typography>
                     <Typography variant="body2">Monitoring Stations</Typography>
                   </Paper>
