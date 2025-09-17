@@ -86,6 +86,11 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
         setDevicesLoading(true);
         const devicesData = await airQualityService.getDevices();
         setDevices(devicesData);
+        
+        // Set first device as default if none selected
+        if (devicesData.length > 0 && selectedDevices.length === 0) {
+          onDeviceSelect([devicesData[0].id]);
+        }
       } catch (error) {
         console.error("Failed to fetch devices:", error);
         setError("Failed to load devices");
@@ -95,7 +100,7 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
     };
 
     fetchDevices();
-  }, []);
+  }, [onDeviceSelect, selectedDevices.length]);
 
   useEffect(() => {
     const fetchMapData = async () => {

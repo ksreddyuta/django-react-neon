@@ -41,12 +41,10 @@ const fetchData = async (url: string) => {
   }
 };
 
-export const useOptimizedDataFetch = (deviceId: string, metric: string, timeRange: string = 'week') => {
-  const [data, setData] = useState<any[]>([]);
+export const useMultiDeviceDataFetch = (deviceIds: string[], metric: string, timeRange: string = 'week') => {
+  const [data, setData] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nextPage, setNextPage] = useState<number>(1);
-  const [hasMore, setHasMore] = useState(true);
 
   // Calculate start and end times based on timeRange
   const getTimeRangeParams = useCallback(() => {
@@ -55,7 +53,8 @@ export const useOptimizedDataFetch = (deviceId: string, metric: string, timeRang
     
     switch (timeRange) {
       case 'day':
-        startTime.setHours(now.getHours() - 24);
+        // Correct 24-hour calculation - subtract exactly 24 hours from now
+        startTime.setTime(now.getTime() - (24 * 60 * 60 * 1000));
         break;
       case 'week':
         startTime.setDate(now.getDate() - 7);
@@ -85,10 +84,9 @@ export const useOptimizedDataFetch = (deviceId: string, metric: string, timeRang
     };
   }, [timeRange]);
 
-  const loadData = useCallback(async (page: number, currentMetric: string, reset: boolean = false) => {
-    if (!deviceId || !currentMetric) {
-      setData([]);
-      setHasMore(false);
+  const loadData = useCallback(async (currentMetric: string) => {
+    if (!deviceIds || deviceIds.length === 0 || !currentMetric) {
+      setData({});
       return;
     }
 
@@ -99,65 +97,51 @@ export const useOptimizedDataFetch = (deviceId: string, metric: string, timeRang
       // Get time range parameters
       const timeParams = getTimeRangeParams();
       
-      // Construct the proper URL with time range
-      const baseUrl = `${API_BASE_URL}/air-quality/${deviceId}/${currentMetric}/`;
-      const queryParams = new URLSearchParams({
-        start_time: timeParams.start_time,
-        end_time: timeParams.end_time,
-        page: page.toString(),
-        limit: '500',
-      });
+      // Fetch data for all devices
+      const deviceData: Record<string, any[]> = {};
       
-      const url = `${baseUrl}?${queryParams.toString()}`;
-      console.log('Fetching from URL:', url);
-      
-      const response = await fetchData(url);
-      
-      // Handle response
-      if (response && Array.isArray(response)) {
-        if (reset) {
-          setData(response);
-        } else {
-          setData(prev => [...prev, ...response]);
+      await Promise.all(deviceIds.map(async (deviceId) => {
+        try {
+          // Construct the proper URL with time range
+          const baseUrl = `${API_BASE_URL}/air-quality/${deviceId}/${currentMetric}/`;
+          const queryParams = new URLSearchParams({
+            start_time: timeParams.start_time,
+            end_time: timeParams.end_time,
+            page: '1',
+            limit: '500',
+          });
+          
+          const url = `${baseUrl}?${queryParams.toString()}`;
+          console.log('Fetching from URL:', url);
+          
+          const response = await fetchData(url);
+          deviceData[deviceId] = Array.isArray(response) ? response : [];
+        } catch (err) {
+          console.error(`Failed to fetch data for device ${deviceId}:`, err);
+          deviceData[deviceId] = [];
         }
-        
-        // Update pagination info
-        // Assuming the API returns all data at once for now
-        setHasMore(false);
-        setNextPage(page);
-      } else {
-        console.error('Unexpected API response format:', response);
-        setError('Unexpected data format from server');
-        setHasMore(false);
-      }
+      }));
+      
+      setData(deviceData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch data';
       setError(errorMessage);
-      setHasMore(false);
     } finally {
       setLoading(false);
     }
-  }, [deviceId, getTimeRangeParams]);
+  }, [deviceIds, getTimeRangeParams]);
 
   const changeMetric = useCallback((newMetric: string) => {
-    setData([]);
-    setNextPage(1);
-    setHasMore(true);
-    loadData(1, newMetric, true);
+    setData({});
+    loadData(newMetric);
   }, [loadData]);
 
-  const loadMore = useCallback(() => {
-    if (hasMore && !loading) {
-      loadData(nextPage, metric, false);
-    }
-  }, [hasMore, loading, nextPage, metric, loadData]);
-
   useEffect(() => {
-    setData([]);
-    setNextPage(1);
-    setHasMore(true);
-    loadData(1, metric, true);
-  }, [deviceId, metric, timeRange, loadData]);
+    setData({});
+    if (deviceIds.length > 0 && metric) {
+      loadData(metric);
+    }
+  }, [deviceIds, metric, timeRange, loadData]);
 
-  return { data, loading, error, hasMore, loadMore, changeMetric };
+  return { data, loading, error, changeMetric };
 };

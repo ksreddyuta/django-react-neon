@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Container,
   Typography,
@@ -8,12 +8,12 @@ import {
   Paper,
   Tabs,
   Tab,
-  Chip,
   Alert,
 } from "@mui/material";
 import { useAuth } from "../../hooks/useAuth";
 import { MapSection } from "../../components/dashboard/MapSection";
 import { ChartSection } from "../../components/dashboard/ChartSection";
+import { airQualityService } from "../../services/api";
 
 // Tab panel component
 function TabPanel(props: {
@@ -100,9 +100,34 @@ export const DashboardPage: React.FC = () => {
   const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
   const [selectedPollutant, setSelectedPollutant] = useState(0);
   const [timeRange, setTimeRange] = useState('week');
+  const [selectedMetric, setSelectedMetric] = useState('VOC');
+  const [devices, setDevices] = useState<any[]>([]);
+  const [, setDevicesLoading] = useState(true);
 
-  const handlePollutantChange = (_: React.SyntheticEvent, newValue: number) => {
+  useEffect(() => {
+    const fetchDevices = async () => {
+      try {
+        setDevicesLoading(true);
+        const devicesData = await airQualityService.getDevices();
+        setDevices(devicesData);
+        
+        // Set first device as default if none selected
+        if (devicesData.length > 0 && selectedDevices.length === 0) {
+          setSelectedDevices([devicesData[0].id]);
+        }
+      } catch (error) {
+        console.error("Failed to fetch devices:", error);
+      } finally {
+        setDevicesLoading(false);
+      }
+    };
+
+    fetchDevices();
+  }, [selectedDevices.length]);
+
+  const handlePollutantChange = (_event: React.SyntheticEvent, newValue: number) => {
     setSelectedPollutant(newValue);
+    setSelectedMetric(POLLUTANT_INFO[newValue].id);
   };
 
   return (
@@ -121,28 +146,6 @@ export const DashboardPage: React.FC = () => {
           Welcome back, {user?.email}! Monitor air quality across Corpus Christi in
           real-time.
         </Typography>
-      </Box>
-
-      {/* Time Range Selector */}
-      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
-        <Typography variant="body2" fontWeight="medium">
-          Time Range:
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          {['day', 'week', 'month'].map((range) => (
-            <Chip
-              key={range}
-              label={
-                range === 'day' ? '24 Hours' : 
-                range === 'week' ? '7 Days' : '30 Days'
-              }
-              variant={timeRange === range ? 'filled' : 'outlined'}
-              color={timeRange === range ? 'primary' : 'default'}
-              onClick={() => setTimeRange(range)}
-              clickable
-            />
-          ))}
-        </Box>
       </Box>
 
       {/* Main Content Grid */}
@@ -187,7 +190,7 @@ export const DashboardPage: React.FC = () => {
         </Grid>
 
         {/* Right Column - Map, Charts, and Pollutant Details */}
-        <Grid size={{xs:12, md:8, lg:9}}>
+        <Grid size={{xs:12, md:8, lg:9}} >
           <Grid container spacing={4}>
             {/* Pollutant Information Panel */}
             <Grid size={{xs:12}}>
@@ -233,8 +236,11 @@ export const DashboardPage: React.FC = () => {
             <Grid size={{xs:12}}>
               <ChartSection 
                 deviceIds={selectedDevices} 
-                pollutant={POLLUTANT_INFO[selectedPollutant].id}
+                pollutant={selectedMetric}
                 timeRange={timeRange}
+                onMetricChange={setSelectedMetric}
+                onTimeRangeChange={setTimeRange}
+                availableDevices={devices}
               />
             </Grid>
 
@@ -297,7 +303,7 @@ export const DashboardPage: React.FC = () => {
                     <Typography variant="body2">Unhealthy Days</Typography>
                   </Paper>
                 </Grid>
-                <Grid size={{xs:12, sm:6, md:3}}>
+                <Grid size={{xs:12, sm:6, md:3}} >
                   <Paper
                     sx={{
                       p: 2,
@@ -307,7 +313,7 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      20
+                      24
                     </Typography>
                     <Typography variant="body2">Monitoring Stations</Typography>
                   </Paper>
