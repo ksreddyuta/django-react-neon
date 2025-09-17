@@ -102,7 +102,13 @@ export const DashboardPage: React.FC = () => {
   const [timeRange, setTimeRange] = useState('week');
   const [selectedMetric, setSelectedMetric] = useState('VOC');
   const [devices, setDevices] = useState<any[]>([]);
-  const [, setDevicesLoading] = useState(true);
+  const [,setDevicesLoading] = useState(true);
+  const [stats, setStats] = useState({
+    goodDays: 0,
+    moderateDays: 0,
+    unhealthyDays: 0,
+    monitoringStations: 0
+  });
 
   useEffect(() => {
     const fetchDevices = async () => {
@@ -110,6 +116,23 @@ export const DashboardPage: React.FC = () => {
         setDevicesLoading(true);
         const devicesData = await airQualityService.getDevices();
         setDevices(devicesData);
+        
+        // Calculate stats based on devices
+        const airQualityDevices = devicesData.filter(device => 
+          device.type === 'air_quality' || device.id.includes('aq_')
+        );
+        
+        // Mock stats calculation - in a real app, you'd get this from an API
+        const goodDays = Math.floor(Math.random() * 30) + 20; // 20-50 days
+        const moderateDays = Math.floor(Math.random() * 15) + 5; // 5-20 days
+        const unhealthyDays = Math.floor(Math.random() * 10); // 0-10 days
+        
+        setStats({
+          goodDays,
+          moderateDays,
+          unhealthyDays,
+          monitoringStations: airQualityDevices.length
+        });
         
         // Set first device as default if none selected
         if (devicesData.length > 0 && selectedDevices.length === 0) {
@@ -190,7 +213,7 @@ export const DashboardPage: React.FC = () => {
         </Grid>
 
         {/* Right Column - Map, Charts, and Pollutant Details */}
-        <Grid size={{xs:12, md:8, lg:9}} >
+        <Grid size={{xs:12, md:8, lg:9}}>
           <Grid container spacing={4}>
             {/* Pollutant Information Panel */}
             <Grid size={{xs:12}}>
@@ -264,7 +287,7 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      45
+                      {stats.goodDays}
                     </Typography>
                     <Typography variant="body2">
                       Good Air Quality Days
@@ -281,7 +304,7 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      12
+                      {stats.moderateDays}
                     </Typography>
                     <Typography variant="body2">
                       Moderate Air Quality Days
@@ -298,12 +321,12 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      3
+                      {stats.unhealthyDays}
                     </Typography>
                     <Typography variant="body2">Unhealthy Days</Typography>
                   </Paper>
                 </Grid>
-                <Grid size={{xs:12, sm:6, md:3}} >
+                <Grid size={{xs:12, sm:6, md:3}}>
                   <Paper
                     sx={{
                       p: 2,
@@ -313,7 +336,7 @@ export const DashboardPage: React.FC = () => {
                     }}
                   >
                     <Typography variant="h4" component="div" gutterBottom>
-                      24
+                      {stats.monitoringStations}
                     </Typography>
                     <Typography variant="body2">Monitoring Stations</Typography>
                   </Paper>
