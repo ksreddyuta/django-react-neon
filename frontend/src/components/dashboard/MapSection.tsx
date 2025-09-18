@@ -79,6 +79,7 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mapRef = useRef<any>(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   useEffect(() => {
     const fetchDevices = async () => {
@@ -87,9 +88,10 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
         const devicesData = await airQualityService.getDevices();
         setDevices(devicesData);
         
-        // Set first device as default if none selected
-        if (devicesData.length > 0 && selectedDevices.length === 0) {
-          onDeviceSelect([devicesData[0].id]);
+        // Clear any default device selection on initial load
+        if (isInitialLoad && selectedDevices.length > 0) {
+          onDeviceSelect([]);
+          setIsInitialLoad(false);
         }
       } catch (error) {
         console.error("Failed to fetch devices:", error);
@@ -100,7 +102,7 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
     };
 
     fetchDevices();
-  }, [onDeviceSelect, selectedDevices.length]);
+  }, [onDeviceSelect, isInitialLoad, selectedDevices.length]);
 
   useEffect(() => {
     const fetchMapData = async () => {
@@ -225,20 +227,29 @@ export const MapSection: React.FC<MapSectionProps> = ({ onDeviceSelect, selected
         
         <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
           <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel>Devices</InputLabel>
+            <InputLabel>Select Devices</InputLabel>
             <Select
               multiple
               value={selectedDevices}
-              label="Devices"
+              label="Select Devices"
               onChange={handleDeviceChange}
-              renderValue={(selected) => (
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                  {selected.map((value) => (
-                    <Chip key={value} label={devices.find(d => d.id === value)?.display_name || value} size="small" />
-                  ))}
-                </Box>
-              )}
+              displayEmpty
+              renderValue={(selected) => {
+                if (selected.length === 0) {
+                  return <em>Select devices to view data</em>;
+                }
+                return (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {selected.map((value) => (
+                      <Chip key={value} label={devices.find(d => d.id === value)?.display_name || value} size="small" />
+                    ))}
+                  </Box>
+                );
+              }}
             >
+              <MenuItem disabled value="">
+                <em>Select devices to view data</em>
+              </MenuItem>
               {devices.map((device) => (
                 <MenuItem key={device.id} value={device.id}>
                   {device.display_name || device.name}

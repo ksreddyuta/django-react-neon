@@ -197,8 +197,22 @@ export const ChartSection: React.FC<ChartSectionProps> = ({
 
   if (deviceIds.length === 0) {
     return (
-      <Box sx={{ p: 3, textAlign: 'center', color: 'text.secondary' }}>
-        <Typography>Select devices on the map to view data</Typography>
+      <Box sx={{ 
+        p: 3, 
+        textAlign: 'center', 
+        color: 'text.secondary',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '400px'
+      }}>
+        <Typography variant="h6" gutterBottom>
+          No Devices Selected
+        </Typography>
+        <Typography variant="body2">
+          Please select one or more devices from the map to view data
+        </Typography>
       </Box>
     );
   }
@@ -207,7 +221,7 @@ export const ChartSection: React.FC<ChartSectionProps> = ({
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
         <Typography variant="h5" component="h2">
-          Air Quality Data for {deviceIds.length} {deviceIds.length === 1 ? 'Device' : 'Devices'}
+          Air Quality Data for Selected Devices
         </Typography>
         
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
